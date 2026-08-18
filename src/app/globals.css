@@ -1,26 +1,172 @@
 @import "tailwindcss";
 
+@theme {
+  --color-ink-950: #060911;
+  --color-ink-900: #0b1120;
+  --color-ink-850: #0f172a;
+  --color-ink-800: #131c31;
+  --color-ink-700: #1e293b;
+  --color-ink-600: #334155;
+  --color-ink-500: #475569;
+  --color-ink-400: #64748b;
+  --color-ink-300: #94a3b8;
+  --color-ink-200: #cbd5e1;
+  --color-ink-100: #e2e8f0;
+  --color-ink-50: #f8fafc;
+
+  --color-accent: #22d3ee;
+  --color-accent-soft: #0e7490;
+  --color-positive: #34d399;
+  --color-negative: #fb7185;
+  --color-warning: #fbbf24;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  min-height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(60rem 40rem at 82% -12%, rgba(34, 211, 238, 0.11), transparent 62%),
+    radial-gradient(48rem 36rem at 6% 4%, rgba(167, 139, 250, 0.09), transparent 60%),
+    var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tipografía tabular para que las columnas de números no “bailen”. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            Componentes reutilizables                        */
+/* -------------------------------------------------------------------------- */
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-white/8 bg-ink-900/70 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-24px_rgba(0,0,0,0.9)] backdrop-blur-sm;
+  }
+
+  .card-pad {
+    @apply p-5 sm:p-6;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold tracking-wide text-ink-200;
+  }
+
+  .muted {
+    @apply text-sm text-ink-400;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium tracking-wide text-ink-300 uppercase;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-sm text-ink-100
+           outline-none transition placeholder:text-ink-500
+           focus:border-accent/60 focus:ring-2 focus:ring-accent/20
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  select.input {
+    @apply appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2364748b'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+    background-position: right 0.65rem center;
+    background-size: 1.15rem;
+  }
+
+  select.input option {
+    background-color: #0b1120;
+    color: #e2e8f0;
+  }
+
+  /* Se combinan siempre como `class="btn btn-primary"`. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition select-none disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-ink-950 hover:bg-cyan-300 active:scale-[0.99];
+  }
+
+  .btn-secondary {
+    @apply border border-white/12 bg-white/5 text-ink-100 hover:border-white/25 hover:bg-white/10;
+  }
+
+  .btn-ghost {
+    @apply text-ink-300 hover:bg-white/5 hover:text-ink-100;
+  }
+
+  .btn-danger {
+    @apply border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1
+           text-xs font-medium text-ink-300;
+  }
+
+  .alert-error {
+    @apply rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200;
+  }
+
+  .alert-info {
+    @apply rounded-xl border border-accent/25 bg-accent/8 px-4 py-3 text-sm text-cyan-100;
+  }
+
+  .table-wrap {
+    @apply overflow-x-auto rounded-2xl border border-white/8;
+  }
+
+  .table {
+    @apply w-full min-w-[52rem] border-collapse text-sm;
+  }
+
+  .table thead th {
+    @apply bg-white/4 px-4 py-3 text-left text-xs font-semibold tracking-wide text-ink-300 uppercase whitespace-nowrap;
+  }
+
+  .table tbody td {
+    @apply border-t border-white/6 px-4 py-3 text-ink-200 whitespace-nowrap;
+  }
+
+  .table tbody tr:hover td {
+    @apply bg-white/3;
+  }
+}
+
+/* Scrollbar discreta y acorde al tema oscuro. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+  background-clip: content-box;
 }
