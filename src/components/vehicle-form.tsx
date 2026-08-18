@@ -36,7 +36,7 @@ export function VehicleForm({ vehicle }: { vehicle?: Vehicle }) {
   const secondaryUnit = secondaryFuel ? fuelUnit(secondaryFuel) : null;
 
   return (
-    <form action={formAction} className="grid gap-5">
+    <form action={formAction} className="grid grid-cols-1 gap-5">
       {isEdit ? <input type="hidden" name="vehicleId" value={vehicle!.id} /> : null}
       <input type="hidden" name="color" value={color} />
 

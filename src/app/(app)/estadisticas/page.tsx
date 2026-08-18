@@ -170,9 +170,9 @@ export default async function StatisticsPage({
         </div>
       ) : null}
 
-      <div className="grid gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* -------------------------------- KPIs -------------------------------- */}
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Consumo promedio"
             value={
@@ -216,7 +216,7 @@ export default async function StatisticsPage({
         </section>
 
         {selected ? (
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Gasto por día"
               value={selected.avgSpentPerDay ? formatCurrency(selected.avgSpentPerDay) : "—"}
@@ -260,7 +260,7 @@ export default async function StatisticsPage({
         ) : null}
 
         {/* ------------------------------- Gráficos ------------------------------ */}
-        <section className="grid gap-4 xl:grid-cols-2">
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <Card className="xl:col-span-2">
             <CardHeader title={`Gasto y ${quantityWord} por mes`} />
             <div className="p-4 sm:p-5">
@@ -339,7 +339,7 @@ export default async function StatisticsPage({
         </section>
 
         {/* -------------------------------- Récords ------------------------------ */}
-        <section className="grid gap-4 sm:grid-cols-3">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Card className="card-pad">
             <p className="text-xs font-medium tracking-wide text-ink-400 uppercase">Carga más cara</p>
             <p className="tabular mt-2 text-xl font-semibold text-ink-50">
@@ -376,7 +376,7 @@ export default async function StatisticsPage({
         </section>
 
         {/* ------------------------------- Tablas -------------------------------- */}
-        <section className="grid gap-4">
+        <section className="grid grid-cols-1 gap-4">
           <Card>
             <CardHeader title="Detalle por estación" subtitle="Dónde conviene cargar" />
             <BreakdownTable rows={byStation} firstColumn="Estación" unit={unitLabel} />

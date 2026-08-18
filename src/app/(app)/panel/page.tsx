@@ -100,9 +100,9 @@ export default async function DashboardPage({
         </p>
       ) : null}
 
-      <div className="grid gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* -------------------------------- KPIs -------------------------------- */}
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Gasto de este mes"
             value={formatCurrency(summary.spentThisMonth)}
@@ -157,7 +157,7 @@ export default async function DashboardPage({
           />
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Gasto acumulado"
             value={formatCurrency(summary.totalSpent)}
@@ -212,7 +212,7 @@ export default async function DashboardPage({
         ) : null}
 
         {/* ------------------------------- Gráficos ------------------------------ */}
-        <section className="grid gap-4 xl:grid-cols-2">
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <Card className="xl:col-span-2">
             <CardHeader
               title="Gasto mensual en combustible"
@@ -266,7 +266,7 @@ export default async function DashboardPage({
         {/* ---------------------------- Resumen por auto -------------------------- */}
         <section>
           <h2 className="section-title mb-3">Tus vehículos</h2>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {stats.map((vehicleStats) => (
               <Link
                 key={vehicleStats.vehicleId}

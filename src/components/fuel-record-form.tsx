@@ -284,11 +284,11 @@ export function FuelRecordForm({
     ) : null;
 
   return (
-    <div className="grid gap-5">
+    <div className="grid grid-cols-1 gap-5">
       {scanningEnabled ? <ReceiptScanner onApply={applyReceipt} /> : null}
 
-      <form action={formAction} className="grid gap-5 lg:grid-cols-[1fr_20rem] lg:items-start">
-        <div className="grid gap-5">
+      <form action={formAction} className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_20rem] lg:items-start">
+        <div className="grid grid-cols-1 gap-5">
           {isEdit ? <input type="hidden" name="recordId" value={record!.id} /> : null}
 
           {scanNotice ? (
@@ -718,7 +718,7 @@ export function FuelRecordForm({
         </div>
 
         {/* ------------------------------ Panel lateral ---------------------------- */}
-        <aside className="grid gap-4 lg:sticky lg:top-6">
+        <aside className="grid grid-cols-1 gap-4 lg:sticky lg:top-6">
           <Card className="card-pad">
             <h3 className="section-title">Vista previa del tramo</h3>
             <dl className="mt-4 grid gap-3">

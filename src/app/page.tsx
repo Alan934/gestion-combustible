@@ -73,7 +73,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((feature) => (
             <article key={feature.title} className="card card-pad">
               <span className="grid size-11 place-items-center rounded-xl border border-white/10 bg-white/5 text-xl">

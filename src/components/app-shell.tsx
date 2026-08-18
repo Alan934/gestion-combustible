@@ -20,7 +20,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <nav className="grid gap-1">
+    <nav className="grid grid-cols-1 gap-1">
       {NAV.map((item) => {
         const active = isActive(pathname, item.href);
         return (

@@ -42,7 +42,7 @@ function TooltipBox({ title, rows }: { title: string; rows: TooltipRow[] }) {
   return (
     <div className="rounded-xl border border-white/12 bg-ink-900/95 px-3 py-2.5 shadow-xl backdrop-blur">
       <p className="mb-1.5 text-xs font-semibold text-ink-100">{title}</p>
-      <ul className="grid gap-1">
+      <ul className="grid grid-cols-1 gap-1">
         {rows.map((row) => (
           <li key={row.label} className="flex items-center gap-2 text-xs">
             {row.color ? (
@@ -57,13 +57,26 @@ function TooltipBox({ title, rows }: { title: string; rows: TooltipRow[] }) {
   );
 }
 
-/** Envoltorio con altura fija: `ResponsiveContainer` necesita un padre medible. */
+/**
+ * Envoltorio de los gráficos.
+ *
+ * `ResponsiveContainer` mide a su padre y se fija un ancho en píxeles. Si ese
+ * ancho participa del flujo, se arma un círculo vicioso en pantallas chicas: el
+ * gráfico ensancha la celda del grid, el contenedor vuelve a medir más ancho, y
+ * la página entera termina desbordada.
+ *
+ * La caja de afuera reserva el alto y el gráfico va en una capa absoluta: al
+ * estar fuera del flujo no puede aportar ancho a ningún ancestro, así que sólo
+ * puede achicarse hasta donde le den.
+ */
 function ChartFrame({ height = 280, children }: { height?: number; children: React.ReactElement }) {
   return (
-    <div style={{ width: "100%", height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
+    <div style={{ position: "relative", width: "100%", minWidth: 0, height }}>
+      <div style={{ position: "absolute", inset: 0 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          {children}
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

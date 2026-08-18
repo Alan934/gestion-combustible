@@ -11,7 +11,7 @@ export function InsightsList({ insights }: { insights: Insight[] }) {
   if (!insights.length) return null;
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {insights.map((insight) => {
         const tone = TONE_STYLES[insight.tone];
         return (

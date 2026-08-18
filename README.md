@@ -277,3 +277,9 @@ borra todo.
   siempre la que se guarda.
 - **Coma o punto decimal** en todos los campos numéricos: es lo que la gente
   escribe de verdad.
+- **Grillas con `grid-cols-1` explícito.** Sin columnas declaradas, la columna
+  implícita de un grid se dimensiona a `max-content`. Como `ResponsiveContainer`
+  de Recharts se fija un ancho en píxeles, ese ancho pasaba a ser el contenido
+  máximo y ensanchaba la página entera en celulares. Declarar la columna
+  (`grid-cols-1` = `minmax(0, 1fr)`) corta el círculo. Los gráficos, además, van
+  en una capa absoluta para no aportar ancho a ningún ancestro.

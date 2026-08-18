@@ -33,7 +33,7 @@ export default async function VehiclesPage() {
           actionHref="/vehiculos/nuevo"
         />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {vehicles.map((vehicle) => {
             const vehicleStats = stats.find((s) => s.vehicleId === vehicle.id);
             const fuel = fuelType(vehicle.fuelType);

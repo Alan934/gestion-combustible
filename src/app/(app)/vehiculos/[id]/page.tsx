@@ -112,9 +112,9 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
           actionHref={`/cargas/nueva?vehiculo=${vehicle.id}&primera=1`}
         />
       ) : (
-        <div className="grid gap-6">
+        <div className="grid grid-cols-1 gap-6">
           {/* ------------------------------- KPIs ------------------------------- */}
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label={stats.isDual ? `Consumo · ${fuel.short}` : "Consumo promedio"}
               value={
@@ -221,7 +221,7 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
                 </div>
               ) : null}
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {stats.fuelPerformance.map((fuelStats) => (
                   <Card key={fuelStats.fuelTypeId} className="card-pad">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -318,7 +318,7 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
           ) : null}
 
           {/* ------------------------------ Gráficos ----------------------------- */}
-          <section className="grid gap-4 xl:grid-cols-2">
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <Card>
               <CardHeader
                 title="Consumo por tramo"
