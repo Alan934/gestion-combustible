@@ -105,6 +105,12 @@ export type VehicleOption = {
   lastPricePerLiter: number | null;
   /** Último precio conocido de cada combustible, para precargar según el elegido. */
   lastPriceByFuel: Record<string, number>;
+  /**
+   * Si la última carga de cada combustible fue a tanque lleno. El formulario lo
+   * usa para arrancar el checkbox como el usuario viene cargando: quien nunca
+   * llena el tanque no tiene por qué destildarlo cada vez.
+   */
+  lastIsFullTankByFuel: Record<string, boolean>;
   lastStation: string | null;
   lastPaymentMethod: string | null;
 };
@@ -126,7 +132,11 @@ export async function getVehicleOptions(userId: string): Promise<VehicleOption[]
 
     // Recorriendo en orden ascendente, el último de cada combustible gana.
     const lastPriceByFuel: Record<string, number> = {};
-    for (const record of own) lastPriceByFuel[record.fuelType] = record.pricePerLiter;
+    const lastIsFullTankByFuel: Record<string, boolean> = {};
+    for (const record of own) {
+      lastPriceByFuel[record.fuelType] = record.pricePerLiter;
+      lastIsFullTankByFuel[record.fuelType] = record.isFullTank;
+    }
 
     const lastOdometer = own.length ? Math.max(...own.map((r) => r.odometer)) : null;
 
@@ -140,6 +150,7 @@ export async function getVehicleOptions(userId: string): Promise<VehicleOption[]
       lastOdometer: lastOdometer ?? (vehicle.initialOdometer || null),
       lastPricePerLiter: last?.pricePerLiter ?? null,
       lastPriceByFuel,
+      lastIsFullTankByFuel,
       lastStation: last?.station ?? null,
       lastPaymentMethod: last?.paymentMethod ?? null,
     };

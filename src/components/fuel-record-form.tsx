@@ -26,6 +26,7 @@ export type VehicleOption = {
   lastOdometer: number | null;
   lastPricePerLiter: number | null;
   lastPriceByFuel: Record<string, number>;
+  lastIsFullTankByFuel: Record<string, boolean>;
   lastStation: string | null;
   lastPaymentMethod: string | null;
 };
@@ -105,6 +106,15 @@ function initialTriple(record?: FuelRecord): TripleState {
 
 const DATETIME_LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
+/**
+ * Cómo viene cargando el usuario ese vehículo con ese combustible. Si no hay
+ * historial, se asume tanque lleno: es lo más común y lo que hace que el consumo
+ * se pueda calcular desde la segunda carga.
+ */
+function rememberedFullTank(vehicles: VehicleOption[], vehicleId: string, fuelId: string) {
+  return vehicles.find((v) => v.id === vehicleId)?.lastIsFullTankByFuel[fuelId] ?? true;
+}
+
 function SubmitButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
@@ -142,10 +152,19 @@ export function FuelRecordForm({
 
   const [triple, setTriple] = useState<TripleState>(() => initialTriple(record));
   const [odometer, setOdometer] = useState(record ? String(record.odometer) : "");
-  const [selectedFuel, setSelectedFuel] = useState(
-    record?.fuelType ?? vehicle?.fuelType ?? "nafta_super",
-  );
-  const [isFullTank, setIsFullTank] = useState(record?.isFullTank ?? true);
+  const selectedFuelInicial = record?.fuelType ?? vehicle?.fuelType ?? "nafta_super";
+  const [selectedFuel, setSelectedFuel] = useState(selectedFuelInicial);
+  /**
+   * "Llené el tanque" arranca como venías cargando ese vehículo con ese
+   * combustible: si tu última carga de nafta fue parcial, esta también.
+   * `touched` marca que lo decidiste vos, y a partir de ahí no se toca más solo.
+   */
+  const [fullTank, setFullTank] = useState(() => ({
+    value: record ? record.isFullTank : rememberedFullTank(vehicles, vehicleId, selectedFuelInicial),
+    touched: Boolean(record),
+  }));
+  const isFullTank = fullTank.value;
+  const setIsFullTank = (value: boolean) => setFullTank({ value, touched: true });
   const [missedPrevious, setMissedPrevious] = useState(record?.missedPreviousFill ?? false);
 
   const [details, setDetails] = useState({
@@ -170,6 +189,16 @@ export function FuelRecordForm({
 
   const unit = fuelType(selectedFuel).unit;
 
+  /**
+   * El valor del checkbox viene de cómo venías cargando (no lo tocaste vos en
+   * este formulario y hay una carga anterior de ese combustible de la cual
+   * copiarlo). Se avisa en pantalla para que el default no sea invisible.
+   */
+  const recuerdaCostumbre =
+    !isEdit &&
+    !fullTank.touched &&
+    vehicle?.lastIsFullTankByFuel[selectedFuel] !== undefined;
+
   /* --- Bicombustible: qué combustible se está cargando cambia todo lo demás --- */
   const isDual = Boolean(vehicle?.secondaryFuelType);
   const isSecondary = Boolean(vehicle?.secondaryFuelType && selectedFuel === vehicle.secondaryFuelType);
@@ -177,6 +206,30 @@ export function FuelRecordForm({
   const lastPriceForFuel = vehicle?.lastPriceByFuel[selectedFuel] ?? null;
   /** Capacidad del tanque que corresponde al combustible elegido. */
   const tankForFuel = isSecondary ? (vehicle?.secondaryTankCapacity ?? null) : (vehicle?.tankCapacity ?? null);
+
+  /**
+   * Al cambiar de vehículo o de combustible, el checkbox vuelve a tomar la
+   * costumbre de esa combinación — salvo que el usuario ya lo haya decidido a
+   * mano en este formulario.
+   */
+  function applyRememberedFullTank(nextVehicleId: string, nextFuel: string) {
+    setFullTank((prev) =>
+      prev.touched ? prev : { value: rememberedFullTank(vehicles, nextVehicleId, nextFuel), touched: false },
+    );
+  }
+
+  function changeFuel(nextFuel: string) {
+    setSelectedFuel(nextFuel);
+    applyRememberedFullTank(vehicleId, nextFuel);
+  }
+
+  function changeVehicle(nextVehicleId: string) {
+    setVehicleId(nextVehicleId);
+    const next = vehicles.find((v) => v.id === nextVehicleId);
+    const nextFuel = next && !isEdit ? next.fuelType : selectedFuel;
+    if (next && !isEdit) setSelectedFuel(nextFuel);
+    applyRememberedFullTank(nextVehicleId, nextFuel);
+  }
 
   /* ------------------ Cálculo automático del trío de valores ----------------- */
 
@@ -210,7 +263,7 @@ export function FuelRecordForm({
     if (receipt.filledAt && DATETIME_LOCAL.test(receipt.filledAt)) {
       setDetails((prev) => ({ ...prev, filledAt: receipt.filledAt! }));
     }
-    if (receipt.fuelType) setSelectedFuel(receipt.fuelType);
+    if (receipt.fuelType) changeFuel(receipt.fuelType);
     if (receipt.odometer !== null) setOdometer(String(receipt.odometer));
 
     setDetails((prev) => ({
@@ -321,11 +374,7 @@ export function FuelRecordForm({
                   name="vehicleId"
                   required
                   value={vehicleId}
-                  onChange={(event) => {
-                    setVehicleId(event.target.value);
-                    const next = vehicles.find((v) => v.id === event.target.value);
-                    if (next && !isEdit) setSelectedFuel(next.fuelType);
-                  }}
+                  onChange={(event) => changeVehicle(event.target.value)}
                   className="input"
                 >
                   {vehicles.map((option) => (
@@ -364,7 +413,7 @@ export function FuelRecordForm({
                         <button
                           key={fuelId}
                           type="button"
-                          onClick={() => setSelectedFuel(fuelId)}
+                          onClick={() => changeFuel(fuelId)}
                           aria-pressed={active}
                           className={`btn ${active ? "btn-primary" : "btn-secondary"}`}
                         >
@@ -495,7 +544,15 @@ export function FuelRecordForm({
                   className="mt-0.5 size-4 accent-cyan-400"
                 />
                 <span>
-                  <span className="text-sm font-medium text-ink-100">Llené el tanque</span>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-ink-100">Llené el tanque</span>
+                    {recuerdaCostumbre ? (
+                      <span className="rounded-md bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-300 uppercase">
+                        como tu última carga
+                        {isDual ? ` de ${fuelType(selectedFuel).short}` : ""}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="mt-0.5 block text-xs leading-relaxed text-ink-400">
                     El consumo real se calcula de tanque lleno a tanque lleno. Si cargaste sólo una
                     parte, destildá esto: lo cargado se va a sumar al próximo tramo completo.
@@ -536,7 +593,7 @@ export function FuelRecordForm({
                   id="fuelType"
                   name="fuelType"
                   value={selectedFuel}
-                  onChange={(event) => setSelectedFuel(event.target.value)}
+                  onChange={(event) => changeFuel(event.target.value)}
                   className="input"
                 >
                   {FUEL_TYPES.map((fuel) => (

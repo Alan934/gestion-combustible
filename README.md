@@ -84,6 +84,7 @@ sólo toca esa cuenta.
 | `npm run db:migrate` | Aplica las migraciones (producción) |
 | `npm run db:studio` | Drizzle Studio para inspeccionar la base |
 | `npm run db:seed` | Datos de demostración |
+| `npm run test:consumo` | Verifica el motor de consumo contra casos armados a mano |
 
 ---
 
@@ -129,9 +130,19 @@ Consecuencias prácticas:
 
 - Una **carga parcial** no cierra el tramo: sus litros se acumulan y se cuentan
   en el próximo llenado completo.
+- El checkbox **"Llené el tanque"** no arranca siempre tildado: toma el valor de
+  tu última carga **de ese vehículo y ese combustible**, y lo avisa en pantalla
+  con un "como tu última carga". Quien nunca llena el tanque no tiene que
+  destildarlo cada vez, y quien siempre llena no tiene que tildarlo. Apenas lo
+  tocás a mano, esa decisión manda y deja de ajustarse solo.
 - Si marcás **"me salteé una carga"**, ese tramo queda excluido del promedio,
   porque faltan litros que sí se consumieron.
 - La **primera carga** de un vehículo no tiene consumo: es el punto de partida.
+- Los litros que cuentan para un tramo son los que cargás **al final**, no al
+  principio. Si llenás a los 5.300 km y volvés a llenar a los 5.400 con 8 litros,
+  el consumo del tramo es 8 L / 100 km — esos 8 litros son exactamente los que
+  gastaste. El tanque que cargaste a los 5.300 se gastó en kilómetros anteriores,
+  que la app no midió, y por eso no se cuenta en ningún tramo.
 
 El promedio general está ponderado por distancia, no es el promedio simple de los
 tramos: un tramo de 600 km pesa más que uno de 200 km, como corresponde.
