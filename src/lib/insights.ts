@@ -1,5 +1,5 @@
 import { station } from "@/lib/catalogs";
-import { formatCurrency, formatNumber, formatPercent, round } from "@/lib/format";
+import { formatCurrency, formatKm, formatNumber, formatPercent, round } from "@/lib/format";
 import type { VehicleStats } from "@/lib/metrics";
 
 export type Insight = {
@@ -10,6 +10,48 @@ export type Insight = {
 };
 
 const MS_PER_DAY = 86_400_000;
+
+/* ------------------------- Banda de plausibilidad ------------------------- */
+
+/**
+ * Cuánto se puede apartar un tramo de la banda propia del vehículo antes de
+ * marcarlo. 3,5 sigmas robustas: alto a propósito, porque el consumo real varía
+ * bastante entre ciudad y ruta y una alerta que salta seguido se ignora.
+ */
+const OUTLIER_SIGMAS = 3.5;
+
+/**
+ * Dispersión mínima, como fracción de la mediana. Un historial muy parejo daría
+ * una MAD casi nula y entonces cualquier variación normal parecería una anomalía.
+ */
+const MIN_RELATIVE_DISPERSION = 0.05;
+
+/** Tramos mínimos para que la banda propia signifique algo. */
+const MIN_LEGS_FOR_BAND = 6;
+
+/**
+ * Banda físicamente alcanzable respecto del consumo declarado. Deliberadamente
+ * ancha: no busca detectar "manejás mal", busca detectar "este número no puede
+ * salir de este motor" —un odómetro mal tipeado, una carga sin registrar, una
+ * pérdida—. La comparación fina contra fábrica ya la hace `vs-target`.
+ */
+const PLAUSIBLE_VS_TARGET = { min: 0.7, max: 1.8 };
+
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Desviación absoluta mediana, escalada (×1,4826) para leerse como un desvío
+ * estándar. Se usa la versión robusta y no el desvío común porque los outliers
+ * son justamente lo que estamos buscando: incluirlos en la medida de dispersión
+ * los volvería invisibles.
+ */
+function madSigma(values: number[], center: number) {
+  return median(values.map((v) => Math.abs(v - center))) * 1.4826;
+}
 
 /**
  * Desglose por estación limitado al combustible principal. En un bicombustible,
@@ -50,10 +92,94 @@ export function buildInsights(stats: VehicleStats): Insight[] {
   /* --- Tendencia del consumo: últimos 3 tramos contra los 3 anteriores --- */
   // Sólo los del combustible principal: en un dual, comparar un tramo a nafta
   // con uno a gas sería comparar litros con metros cúbicos.
-  const legs = stats.records
+  const legRecords = stats.records
     .filter((r) => r.consumption !== null && r.fuelType === stats.primaryFuelTypeId)
-    .sort((a, b) => a.odometer - b.odometer)
-    .map((r) => r.consumption!);
+    .sort((a, b) => a.odometer - b.odometer);
+  const legs = legRecords.map((r) => r.consumption!);
+
+  /* --- ¿El número es siquiera posible para este motor? --- */
+  /**
+   * Chequeo contra la banda física del vehículo. A diferencia de `vs-target`,
+   * que informa una diferencia normal contra fábrica, este marca valores que no
+   * pueden salir del motor y por lo tanto apuntan a un dato mal cargado.
+   *
+   * Cuando el consumo es estimado (ver `estimateConsumption`), el margen juega
+   * a favor: sólo se marca si ni siquiera el extremo más cercano a la banda
+   * entra. Una estimación imprecisa no debería generar una alarma.
+   */
+  const plausibilityValue = stats.avgConsumption ?? stats.estimatedConsumption;
+  const plausibilityMargin = stats.avgConsumption !== null ? 0 : (stats.estimatedMargin ?? 0);
+  const isEstimated = stats.avgConsumption === null && plausibilityValue !== null;
+
+  let implausible = false;
+
+  if (stats.targetConsumption && plausibilityValue !== null) {
+    const floor = stats.targetConsumption * PLAUSIBLE_VS_TARGET.min;
+    const ceiling = stats.targetConsumption * PLAUSIBLE_VS_TARGET.max;
+    const tooLow = plausibilityValue + plausibilityMargin < floor;
+    const tooHigh = plausibilityValue - plausibilityMargin > ceiling;
+    implausible = tooLow || tooHigh;
+
+    if (implausible) {
+      const cual = isEstimated ? "El consumo estimado" : "Tu promedio";
+      insights.push({
+        id: "implausible-consumption",
+        tone: "warning",
+        title: tooLow
+          ? "Ese consumo es demasiado bajo para ser real"
+          : "Ese consumo es demasiado alto para ser real",
+        text: `${cual} da ${formatNumber(plausibilityValue, 2)} ${unit}, fuera de lo que puede rendir este motor (entre ${formatNumber(
+          floor,
+          1,
+        )} y ${formatNumber(ceiling, 1)} ${unit} según el consumo de referencia que cargaste). ${
+          tooLow
+            ? "Casi siempre es una carga que no quedó registrada o un odómetro cargado de más: los kilómetros están, los litros no."
+            : "Revisá que el odómetro esté bien cargado; si los datos están bien, puede ser presión de neumáticos, filtro de aire, una pérdida o combustible que se está yendo."
+        }`,
+      });
+    }
+  }
+
+  /* --- ¿Este tramo se sale de la banda del propio vehículo? --- */
+  /**
+   * La referencia más confiable de un vehículo es su propio historial: no hace
+   * falta que el usuario cargue nada y se calibra solo. Se mira sólo el último
+   * tramo —avisar por uno de hace dos años no sirve para nada—, y se menciona
+   * cuántos otros quedaron fuera para dar contexto.
+   */
+  if (legs.length >= MIN_LEGS_FOR_BAND) {
+    const center = median(legs);
+    const dispersion = Math.max(madSigma(legs, center), center * MIN_RELATIVE_DISPERSION);
+    const isOutlier = (value: number) => Math.abs(value - center) > OUTLIER_SIGMAS * dispersion;
+
+    const last = legRecords[legRecords.length - 1];
+    const lastValue = last.consumption!;
+
+    if (isOutlier(lastValue)) {
+      const high = lastValue > center;
+      const others = legs.slice(0, -1).filter(isOutlier).length;
+
+      insights.push({
+        id: "outlier-leg",
+        tone: "warning",
+        title: high
+          ? "El último tramo consumió mucho más de lo habitual"
+          : "El último tramo consumió mucho menos de lo habitual",
+        text: `El tramo que cierra en ${formatKm(last.odometer)} dio ${formatNumber(
+          lastValue,
+          2,
+        )} ${unit} contra ${formatNumber(center, 2)} que venís promediando. ${
+          high
+            ? "Puede ser un viaje muy distinto al habitual —ciudad, remolque, ralentí— o algo que empezó a fallar."
+            : "Un tramo tan eficiente suele significar que faltó registrar una carga en el medio, o que el tanque no quedó realmente lleno."
+        }${
+          others > 0
+            ? ` Otros ${others} ${others === 1 ? "tramo quedó" : "tramos quedaron"} igual de lejos del promedio, así que puede ser un problema de cómo se registran las cargas más que del vehículo.`
+            : " Es el único tramo así en todo el historial."
+        }`,
+      });
+    }
+  }
 
   if (legs.length >= 4) {
     const window = Math.min(3, Math.floor(legs.length / 2));
@@ -78,7 +204,7 @@ export function buildInsights(stats: VehicleStats): Insight[] {
   }
 
   /* --- Consumo real contra el declarado por el fabricante --- */
-  if (stats.consumptionVsTargetPct !== null && stats.avgConsumption !== null) {
+  if (!implausible && stats.consumptionVsTargetPct !== null && stats.avgConsumption !== null) {
     const over = stats.consumptionVsTargetPct > 0;
     insights.push({
       id: "vs-target",
@@ -191,6 +317,23 @@ export function buildInsights(stats: VehicleStats): Insight[] {
         text: `${unusable} de ${stats.fills} cargas no aportan al promedio de consumo, por ser parciales o por cargas salteadas. Si llenás el tanque y registrás todas las cargas, el número se vuelve mucho más preciso.`,
       });
     }
+  }
+
+  /**
+   * Sin consumo de referencia el chequeo de plausibilidad no tiene ancla y
+   * nunca se dispara. Se avisa recién cuando ya hay historial: antes de eso el
+   * dato no habilitaría nada y sería sólo un pedido más en el alta.
+   */
+  if (stats.fills >= 6 && stats.avgConsumption !== null && !stats.targetConsumption) {
+    insights.push({
+      id: "missing-target",
+      tone: "neutral",
+      title: "Falta el consumo de referencia",
+      text: `Si cargás en el vehículo el consumo declarado por el fabricante, podemos avisarte cuando un número se va de lo que este motor puede rendir —típicamente una carga sin registrar o un odómetro mal tipeado—. Hoy promediás ${formatNumber(
+        stats.avgConsumption,
+        2,
+      )} ${unit}.`,
+    });
   }
 
   if (stats.fills > 0 && stats.fills < 2) {

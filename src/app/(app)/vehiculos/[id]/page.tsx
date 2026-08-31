@@ -120,14 +120,20 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
               value={
                 stats.avgConsumption
                   ? `${formatNumber(stats.avgConsumption, 2)} ${stats.consumptionUnit}`
-                  : "—"
+                  : stats.estimatedConsumption
+                    ? `≈ ${formatNumber(stats.estimatedConsumption, 2)} ${stats.consumptionUnit}`
+                    : "—"
               }
               hint={
                 stats.avgKmPerLiter
                   ? `${formatNumber(stats.avgKmPerLiter, 2)} ${stats.efficiencyUnit}${
                       stats.isDual ? " · el otro combustible está más abajo" : ""
                     }`
-                  : undefined
+                  : stats.estimatedMargin !== null
+                    ? `± ${formatNumber(stats.estimatedMargin, 2)} · estimado sobre ${formatKm(
+                        stats.estimatedDistance,
+                      )} sin tanque lleno`
+                    : undefined
               }
               accent="#22d3ee"
             />
@@ -240,7 +246,12 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
                         <dd className="tabular mt-0.5 text-sm font-semibold text-ink-100">
                           {fuelStats.avgConsumption
                             ? `${formatNumber(fuelStats.avgConsumption, 2)} ${fuelStats.consumptionUnit}`
-                            : "—"}
+                            : fuelStats.estimatedConsumption
+                              ? `≈ ${formatNumber(fuelStats.estimatedConsumption, 2)} ± ${formatNumber(
+                                  fuelStats.estimatedMargin,
+                                  2,
+                                )} ${fuelStats.consumptionUnit}`
+                              : "—"}
                         </dd>
                       </div>
                       <div>
@@ -269,6 +280,27 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
                         ? ` · ${formatNumber(fuelStats.avgKmPerUnit, 2)} ${fuelStats.efficiencyUnit}`
                         : ""}
                     </p>
+
+                    {fuelStats.excludedLegs === 0 && fuelStats.estimatedConsumption ? (
+                      <p className="mt-3 rounded-xl border border-cyan-500/25 bg-cyan-500/8 px-3 py-2.5 text-xs leading-relaxed text-cyan-100">
+                        Nunca cargaste el tanque lleno, así que este consumo es{" "}
+                        <strong>estimado</strong>: sale de acumular {fuelStats.estimatedFills} cargas
+                        parciales a lo largo de {formatKm(fuelStats.estimatedDistance)}. El ±
+                        {formatNumber(fuelStats.estimatedMargin, 2)} es cuánto puede correrse por no
+                        saber con cuánto combustible arrancaste y terminaste.{" "}
+                        <strong>
+                          Con dos cargas a tanque lleno seguidas el número sale exacto.
+                        </strong>
+                      </p>
+                    ) : null}
+
+                    {fuelStats.excludedLegs === 0 &&
+                    fuelStats.avgConsumption === null &&
+                    fuelStats.estimationNote ? (
+                      <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
+                        {fuelStats.estimationNote}
+                      </p>
+                    ) : null}
 
                     {fuelStats.excludedLegs > 0 ? (
                       <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-3 py-2.5 text-xs leading-relaxed text-amber-200">

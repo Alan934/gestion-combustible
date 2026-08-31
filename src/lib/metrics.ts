@@ -1,5 +1,5 @@
 import { CHART_PALETTE, fuelType, fuelUnit, station as stationInfo } from "@/lib/catalogs";
-import { round } from "@/lib/format";
+import { formatKm, formatNumber, round } from "@/lib/format";
 import type { FuelRecord, Vehicle } from "@/lib/db/schema";
 
 /* -------------------------------------------------------------------------- */
@@ -59,6 +59,24 @@ export type FuelPerformance = {
    * medible todavía.
    */
   excludedLegs: number;
+
+  /* Estimación por acumulación (sólo cuando no hay ningún tramo lleno a lleno) */
+  /**
+   * Consumo estimado a partir de cargas parciales, en la misma unidad que
+   * `avgConsumption`. Es un promedio de ventana larga con un margen de error
+   * explícito; nunca convive con `avgConsumption`. Ver `estimateConsumption`.
+   */
+  estimatedConsumption: number | null;
+  /** Rendimiento estimado, derivado del consumo estimado. */
+  estimatedKmPerUnit: number | null;
+  /** Margen del estimado (±) en unidades de consumo. Siempre viaja con él. */
+  estimatedMargin: number | null;
+  /** Kilómetros que abarca la ventana estimada. */
+  estimatedDistance: number;
+  /** Cargas que abarca la ventana estimada. */
+  estimatedFills: number;
+  /** Por qué todavía no hay estimación (o `null` si la hay, o si sobra). */
+  estimationNote: string | null;
 
   consumptionSeries: ConsumptionPoint[];
   priceSeries: PricePoint[];
@@ -160,6 +178,14 @@ export type VehicleStats = {
   measuredDistance: number;
   measuredLiters: number;
 
+  /* Consumo estimado del combustible principal (sólo si no hay tramos reales) */
+  estimatedConsumption: number | null;
+  estimatedKmPerLiter: number | null;
+  estimatedMargin: number | null;
+  estimatedDistance: number;
+  estimatedFills: number;
+  estimationNote: string | null;
+
   /* Costos */
   costPerKm: number | null;
   costPer100Km: number | null;
@@ -176,6 +202,10 @@ export type VehicleStats = {
   avgKmPerDay: number | null;
   avgSpentPerDay: number | null;
   avgSpentPerMonth: number | null;
+
+  /** Consumo declarado por el fabricante, si el usuario lo cargó. Es el ancla
+   * de la banda de plausibilidad: sin él no hay contra qué comparar. */
+  targetConsumption: number | null;
 
   /* Proyecciones */
   estimatedRange: number | null;
@@ -406,11 +436,158 @@ function buildBreakdown(
     .sort((a, b) => b.spent - a.spent);
 }
 
+/* --------------------- Estimación por cargas parciales --------------------- */
+
+/**
+ * Margen relativo máximo para publicar un estimado. Por encima de esto el
+ * número no distingue "manejo tranquilo" de "error de medición" y no se muestra.
+ */
+const MAX_ESTIMATE_MARGIN_RATIO = 0.15;
+
+/** Cargas mínimas en la ventana. El margen ya filtra, esto es sólo un piso. */
+const MIN_ESTIMATE_FILLS = 4;
+
+type ConsumptionEstimate = {
+  consumption: number | null;
+  kmPerUnit: number | null;
+  margin: number | null;
+  distance: number;
+  fills: number;
+  note: string | null;
+};
+
+const NO_ESTIMATE: ConsumptionEstimate = {
+  consumption: null,
+  kmPerUnit: null,
+  margin: null,
+  distance: 0,
+  fills: 0,
+  note: null,
+};
+
+function noEstimate(note: string | null): ConsumptionEstimate {
+  return { ...NO_ESTIMATE, note };
+}
+
+/**
+ * Consumo estimado cuando **nunca** se cargó a tanque lleno.
+ *
+ * El método "lleno a lleno" funciona porque el tanque lleno es un nivel
+ * repetible: si empezás y terminás llenos, los litros cargados en el medio son
+ * exactamente los consumidos. Sin ese ancla queda un término desconocido:
+ *
+ *     litros consumidos = litros cargados + (nivel inicial − nivel final)
+ *
+ * Ese término es **acotado** (no puede superar lo que entra en el tanque) pero
+ * los kilómetros se acumulan sin límite. Entonces el error en L/100km cae a
+ * medida que crece la ventana, y —esto es lo importante— se puede *calcular*:
+ *
+ *     margen = variación máxima de nivel / km de la ventana × 100
+ *
+ * Como cota de la variación de nivel se usa la carga más grande registrada: si
+ * nunca cargaste más de 45 L, nunca llegaste con el tanque más de 45 L abajo de
+ * como saliste. Es una cota empírica, no una garantía —un día podés llegar más
+ * vacío que nunca—, así que se topea con `tankCapacity`, que sí es un techo duro.
+ *
+ * El estimado sale con el margen adentro o no sale. Un `8,4` con una advertencia
+ * al lado se lee igual de autoritativo que un `8,4` real; un `8,4 ± 0,9` no.
+ */
+function estimateConsumption(
+  own: EnrichedRecord[],
+  hasOtherFuelRecords: boolean,
+  tankCapacity: number | null,
+): ConsumptionEstimate {
+  /**
+   * Mismo problema que `legHasOtherFuel`, pero peor: acá la ventana entera está
+   * contaminada. El odómetro no dice qué kilómetros hiciste con cada
+   * combustible, y repartir los litros de uno sobre los kilómetros de los dos
+   * daría un consumo absurdamente bajo.
+   */
+  if (hasOtherFuelRecords) {
+    return noEstimate(
+      "No se puede estimar el consumo con cargas parciales en un vehículo bicombustible: el odómetro no distingue con cuál hiciste cada kilómetro.",
+    );
+  }
+
+  /**
+   * Una carga salteada rompe la ventana de verdad: faltan litros del numerador
+   * y el consumo saldría sistemáticamente bajo. No es ruido, es sesgo. Se corta
+   * la cadena y se usa la corrida limpia más larga.
+   */
+  const runs: EnrichedRecord[][] = [];
+  for (const record of own) {
+    if (!runs.length || record.missedPreviousFill) runs.push([]);
+    runs[runs.length - 1].push(record);
+  }
+
+  const run = runs.reduce((best, current) => {
+    const span = (list: EnrichedRecord[]) =>
+      list.length > 1 ? list[list.length - 1].odometer - list[0].odometer : 0;
+    return span(current) > span(best) ? current : best;
+  }, [] as EnrichedRecord[]);
+
+  if (run.length < MIN_ESTIMATE_FILLS) {
+    return noEstimate(
+      `Con ${run.length} ${run.length === 1 ? "carga seguida" : "cargas seguidas"} todavía no alcanza para estimar el consumo. Cargá el tanque lleno dos veces y se mide exacto.`,
+    );
+  }
+
+  const distance = round(run[run.length - 1].odometer - run[0].odometer, 1);
+
+  /**
+   * Los litros de la primera carga son los que te sacan del odómetro inicial:
+   * ya estaban en el tanque al arrancar la ventana y no cuentan. Es la misma
+   * razón por la que la primera carga a tanque lleno no cierra ningún tramo.
+   */
+  const quantity = round(
+    run.slice(1).reduce((sum, r) => sum + r.liters, 0),
+    3,
+  );
+
+  if (distance <= 0 || quantity <= 0) {
+    return noEstimate("El odómetro no avanzó lo suficiente entre las cargas registradas.");
+  }
+
+  const largestFill = Math.max(...run.map((r) => r.liters));
+  const levelBound = tankCapacity ? Math.min(tankCapacity, largestFill) : largestFill;
+
+  const consumption = (quantity / distance) * 100;
+  const margin = (levelBound / distance) * 100;
+
+  if (margin > consumption * MAX_ESTIMATE_MARGIN_RATIO) {
+    /**
+     * Cuántos kilómetros más de cargas seguidas harían falta para que el margen
+     * entre en el umbral. El margen es inversamente proporcional a la distancia,
+     * así que la cuenta es directa.
+     */
+    const needed = Math.max(
+      0,
+      round((levelBound * 100) / (consumption * MAX_ESTIMATE_MARGIN_RATIO) - distance, 0),
+    );
+    return noEstimate(
+      `Con ${formatKm(distance)} de cargas parciales el margen de error todavía es de ±${formatNumber(margin, 1)}, demasiado para publicar un número. Harían falta unos ${formatKm(needed)} más de cargas seguidas —o una carga a tanque lleno, que lo mide exacto de una.`,
+    );
+  }
+
+  return {
+    consumption: round(consumption, 2),
+    kmPerUnit: round(distance / quantity, 2),
+    margin: round(margin, 2),
+    distance,
+    fills: run.length,
+    note: null,
+  };
+}
+
 /**
  * Arma el rendimiento de cada combustible presente en las cargas del vehículo.
  * Cada uno con su unidad, su consumo, su precio y sus series propias.
  */
-function buildFuelPerformance(records: EnrichedRecord[], totalSpent: number): FuelPerformance[] {
+function buildFuelPerformance(
+  records: EnrichedRecord[],
+  totalSpent: number,
+  vehicle: Vehicle,
+): FuelPerformance[] {
   const fuels = new Set(records.map((r) => r.fuelType));
 
   return [...fuels]
@@ -445,6 +622,26 @@ function buildFuelPerformance(records: EnrichedRecord[], totalSpent: number): Fu
       const avgConsumption = safeDiv(measuredQuantity * 100, measuredDistance);
       const avgKmPerUnit = safeDiv(measuredDistance, measuredQuantity);
 
+      const tankCapacity =
+        fuelId === vehicle.fuelType
+          ? vehicle.tankCapacity
+          : fuelId === vehicle.secondaryFuelType
+            ? vehicle.secondaryTankCapacity
+            : null;
+
+      /**
+       * El estimado y el promedio real nunca conviven. Si hay aunque sea un
+       * tramo lleno a lleno, ese número es de otra categoría —±1 L contra ±40 L—
+       * y promediarlo con una estimación sería tirar la precisión a la basura.
+       */
+      const estimate = legs.length
+        ? NO_ESTIMATE
+        : estimateConsumption(
+            own,
+            records.some((r) => r.fuelType !== fuelId),
+            tankCapacity,
+          );
+
       return {
         fuelTypeId: fuelId,
         label: info.label,
@@ -465,6 +662,13 @@ function buildFuelPerformance(records: EnrichedRecord[], totalSpent: number): Fu
         costPerKm: safeDiv(measuredCost, measuredDistance),
         measuredDistance,
         excludedLegs: own.filter((r) => r.legHasOtherFuel).length,
+
+        estimatedConsumption: estimate.consumption,
+        estimatedKmPerUnit: estimate.kmPerUnit,
+        estimatedMargin: estimate.margin,
+        estimatedDistance: estimate.distance,
+        estimatedFills: estimate.fills,
+        estimationNote: estimate.note,
 
         consumptionSeries: ownByDate
           .filter((r) => r.consumption !== null)
@@ -521,7 +725,7 @@ export function computeVehicleStats(vehicle: Vehicle, rawRecords: FuelRecord[]):
 
   /* --- Rendimiento de cada combustible por separado --- */
   const isDual = Boolean(vehicle.secondaryFuelType);
-  const fuelPerformance = buildFuelPerformance(records, totalSpent);
+  const fuelPerformance = buildFuelPerformance(records, totalSpent, vehicle);
 
   /**
    * Los indicadores de cabecera del vehículo son los del combustible principal.
@@ -776,6 +980,14 @@ export function computeVehicleStats(vehicle: Vehicle, rawRecords: FuelRecord[]):
     measuredDistance,
     measuredLiters,
 
+    /* La cabecera del vehículo habla del combustible principal, el estimado también. */
+    estimatedConsumption: primaryFuel?.estimatedConsumption ?? null,
+    estimatedKmPerLiter: primaryFuel?.estimatedKmPerUnit ?? null,
+    estimatedMargin: primaryFuel?.estimatedMargin ?? null,
+    estimatedDistance: primaryFuel?.estimatedDistance ?? 0,
+    estimatedFills: primaryFuel?.estimatedFills ?? 0,
+    estimationNote: primaryFuel?.estimationNote ?? null,
+
     costPerKm: costPerKm !== null ? round(costPerKm, 2) : null,
     costPer100Km: costPerKm !== null ? round(costPerKm * 100, 2) : null,
     avgPricePerLiter: avgPricePerLiter !== null ? round(avgPricePerLiter, 2) : null,
@@ -801,6 +1013,8 @@ export function computeVehicleStats(vehicle: Vehicle, rawRecords: FuelRecord[]):
     estimatedFullTankCost,
     projectedMonthlySpend,
     consumptionVsTargetPct,
+
+    targetConsumption: vehicle.targetConsumption,
 
     totalVat,
 
