@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 
 import { registerAction, type AuthState } from "@/lib/auth/actions";
 import { Field } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -46,28 +47,24 @@ export function RegisterForm() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Contraseña" htmlFor="password">
-          <input
+          <PasswordInput
             id="password"
             name="password"
-            type="password"
             autoComplete="new-password"
             required
             minLength={8}
             placeholder="Mínimo 8 caracteres"
-            className="input"
           />
         </Field>
 
         <Field label="Repetir contraseña" htmlFor="confirmPassword">
-          <input
+          <PasswordInput
             id="confirmPassword"
             name="confirmPassword"
-            type="password"
             autoComplete="new-password"
             required
             minLength={8}
             placeholder="••••••••"
-            className="input"
           />
         </Field>
       </div>

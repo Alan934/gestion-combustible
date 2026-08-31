@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Field } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 import { changePasswordAction, type PasswordState } from "@/lib/auth/actions";
 
 function SubmitButton() {
@@ -21,37 +22,31 @@ export function PasswordForm() {
   return (
     <form action={formAction} className="card-pad grid gap-4">
       <Field label="Contraseña actual" htmlFor="currentPassword">
-        <input
+        <PasswordInput
           id="currentPassword"
           name="currentPassword"
-          type="password"
           autoComplete="current-password"
           required
-          className="input"
         />
       </Field>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Nueva contraseña" htmlFor="newPassword">
-          <input
+          <PasswordInput
             id="newPassword"
             name="newPassword"
-            type="password"
             autoComplete="new-password"
             required
             minLength={8}
-            className="input"
           />
         </Field>
         <Field label="Repetir nueva contraseña" htmlFor="confirmPassword">
-          <input
+          <PasswordInput
             id="confirmPassword"
             name="confirmPassword"
-            type="password"
             autoComplete="new-password"
             required
             minLength={8}
-            className="input"
           />
         </Field>
       </div>

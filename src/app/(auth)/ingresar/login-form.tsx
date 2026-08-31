@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 
 import { loginAction, type AuthState } from "@/lib/auth/actions";
 import { Field } from "@/components/ui";
+import { PasswordInput } from "@/components/password-input";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -35,14 +36,12 @@ export function LoginForm({ redirectTo }: { redirectTo?: string }) {
       </Field>
 
       <Field label="Contraseña" htmlFor="password">
-        <input
+        <PasswordInput
           id="password"
           name="password"
-          type="password"
           autoComplete="current-password"
           required
           placeholder="••••••••"
-          className="input"
         />
       </Field>
 

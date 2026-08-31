@@ -43,6 +43,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+@layer base {
+  /*
+   * Tailwind resetea el cursor de los botones a `default`. Devolvemos la
+   * manito del mouse en todo lo clickeable, salvo cuando está deshabilitado.
+   */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  label[for],
+  summary {
+    cursor: pointer;
+  }
+}
+
 /* Tipografía tabular para que las columnas de números no “bailen”. */
 .tabular {
   font-variant-numeric: tabular-nums;
@@ -99,8 +112,9 @@ body {
 
   /* Se combinan siempre como `class="btn btn-primary"`. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
-           transition select-none disabled:cursor-not-allowed disabled:opacity-55;
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition select-none
+           disabled:cursor-not-allowed disabled:opacity-55;
   }
 
   .btn-primary {
