@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
 import { Card, CardHeader } from "@/components/ui";
 import type { VerifiedReceipt } from "@/lib/ai/receipt";
@@ -13,6 +13,24 @@ const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 0.85;
 
 type Preview = { id: string; file: File; url: string };
+
+/** Pantalla táctil: ahí `capture` sí abre la cámara y conviene separar los botones. */
+const TOUCH_QUERY = "(pointer: coarse)";
+
+function subscribeToPointer(onChange: () => void) {
+  const query = window.matchMedia(TOUCH_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function useIsTouch() {
+  return useSyncExternalStore(
+    subscribeToPointer,
+    () => window.matchMedia(TOUCH_QUERY).matches,
+    // En el servidor se asume escritorio; al hidratar se corrige.
+    () => false,
+  );
+}
 
 /**
  * Reduce la foto en el navegador antes de subirla. Una foto de celular pesa
@@ -84,12 +102,22 @@ function ReceiptSummary({ receipt }: { receipt: VerifiedReceipt }) {
 }
 
 export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt) => void }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [receipts, setReceipts] = useState<VerifiedReceipt[] | null>(null);
   const [used, setUsed] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // En escritorio el botón de cámara abriría el mismo explorador de archivos
+  // que el de la galería, así que ahí se muestra uno solo.
+  const isTouch = useIsTouch();
+
+  /** Limpia los dos inputs para poder volver a elegir la misma foto. */
+  function clearInputs() {
+    if (galleryInputRef.current) galleryInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+  }
 
   function reset() {
     previews.forEach((preview) => URL.revokeObjectURL(preview.url));
@@ -97,7 +125,7 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
     setReceipts(null);
     setUsed(new Set());
     setError(null);
-    if (inputRef.current) inputRef.current.value = "";
+    clearInputs();
   }
 
   async function handleFiles(fileList: FileList | null) {
@@ -120,7 +148,7 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
       ]);
     } finally {
       setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
+      clearInputs();
     }
   }
 
@@ -172,7 +200,7 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
     <Card>
       <CardHeader
         title="Leer desde una foto del ticket"
-        subtitle="Sacale una foto al comprobante y los datos se completan solos. Podés subir varias fotos del mismo ticket, o de tickets distintos."
+        subtitle="Sacale una foto al comprobante o subí una que ya tengas en la galería y los datos se completan solos. Podés usar varias fotos del mismo ticket, o de tickets distintos."
         action={
           previews.length || receipts ? (
             <button type="button" onClick={reset} className="btn btn-ghost px-3 py-1.5 text-xs">
@@ -183,25 +211,48 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
       />
 
       <div className="card-pad">
+        {/* Dos inputs: el de la galería no lleva `capture`, así el celular deja
+            elegir fotos ya guardadas en vez de forzar la cámara. */}
         <input
-          ref={inputRef}
+          ref={galleryInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(event) => handleFiles(event.target.files)}
+          className="hidden"
+          id="ticket-images"
+        />
+
+        <input
+          ref={cameraInputRef}
           type="file"
           accept="image/*"
           multiple
           capture="environment"
           onChange={(event) => handleFiles(event.target.files)}
           className="hidden"
-          id="ticket-images"
+          id="ticket-images-camara"
         />
 
         <div className="flex flex-wrap items-center gap-3">
+          {isTouch ? (
+            <button
+              type="button"
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={busy || previews.length >= MAX_IMAGES}
+              className="btn btn-secondary"
+            >
+              📷 Sacar una foto
+            </button>
+          ) : null}
+
           <button
             type="button"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => galleryInputRef.current?.click()}
             disabled={busy || previews.length >= MAX_IMAGES}
             className="btn btn-secondary"
           >
-            📷 Elegir fotos
+            {isTouch ? "🖼️ Elegir de la galería" : "🖼️ Elegir fotos"}
           </button>
 
           {previews.length ? (
