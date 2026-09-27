@@ -75,6 +75,13 @@ export type FuelPerformance = {
   estimatedDistance: number;
   /** Cargas que abarca la ventana estimada. */
   estimatedFills: number;
+  /**
+   * El estimado se publicó con un margen por encima del umbral de precisión:
+   * sirve de orientación, no para comparar contra el consumo de fábrica.
+   */
+  estimatedLowPrecision: boolean;
+  /** Kilómetros de cargas seguidas que faltan para afinar un estimado flojo. */
+  estimatedKmToPrecise: number | null;
   /** Por qué todavía no hay estimación (o `null` si la hay, o si sobra). */
   estimationNote: string | null;
 
@@ -184,6 +191,8 @@ export type VehicleStats = {
   estimatedMargin: number | null;
   estimatedDistance: number;
   estimatedFills: number;
+  estimatedLowPrecision: boolean;
+  estimatedKmToPrecise: number | null;
   estimationNote: string | null;
 
   /* Costos */
@@ -439,10 +448,20 @@ function buildBreakdown(
 /* --------------------- Estimación por cargas parciales --------------------- */
 
 /**
- * Margen relativo máximo para publicar un estimado. Por encima de esto el
- * número no distingue "manejo tranquilo" de "error de medición" y no se muestra.
+ * Margen relativo por debajo del cual el estimado se puede leer como un promedio
+ * cualquiera: la ventana ya es lo bastante larga como para que el nivel del
+ * tanque no lo mueva de manera apreciable.
  */
-const MAX_ESTIMATE_MARGIN_RATIO = 0.15;
+const PRECISE_ESTIMATE_MARGIN_RATIO = 0.15;
+
+/**
+ * Margen relativo máximo para publicar el estimado. Entre este umbral y
+ * `PRECISE_ESTIMATE_MARGIN_RATIO` el número sale marcado como de precisión baja
+ * —sirve para tener una idea, no para comparar contra fábrica—. Por encima, el
+ * extremo inferior del rango se acerca a cero: ahí el número ya no distingue
+ * "manejo tranquilo" de "error de medición" y no se muestra.
+ */
+const MAX_ESTIMATE_MARGIN_RATIO = 0.5;
 
 /** Cargas mínimas en la ventana. El margen ya filtra, esto es sólo un piso. */
 const MIN_ESTIMATE_FILLS = 4;
@@ -453,6 +472,13 @@ type ConsumptionEstimate = {
   margin: number | null;
   distance: number;
   fills: number;
+  /** El margen pasa el umbral de precisión: el número se muestra, con aviso. */
+  lowPrecision: boolean;
+  /**
+   * Kilómetros de cargas seguidas que faltan para que el margen baje al umbral
+   * de precisión. Sólo viaja con un estimado de precisión baja.
+   */
+  kmToPrecise: number | null;
   note: string | null;
 };
 
@@ -462,6 +488,8 @@ const NO_ESTIMATE: ConsumptionEstimate = {
   margin: null,
   distance: 0,
   fills: 0,
+  lowPrecision: false,
+  kmToPrecise: null,
   note: null,
 };
 
@@ -489,8 +517,10 @@ function noEstimate(note: string | null): ConsumptionEstimate {
  * como saliste. Es una cota empírica, no una garantía —un día podés llegar más
  * vacío que nunca—, así que se topea con `tankCapacity`, que sí es un techo duro.
  *
- * El estimado sale con el margen adentro o no sale. Un `8,4` con una advertencia
- * al lado se lee igual de autoritativo que un `8,4` real; un `8,4 ± 0,9` no.
+ * El estimado nunca sale sin su margen: un `8,4` pelado se lee igual de
+ * autoritativo que un `8,4` real, un `8,4 ± 0,9` no. Con el margen adentro sí se
+ * puede publicar antes de que la ventana sea larga, marcándolo como de precisión
+ * baja y diciendo cuántos kilómetros faltan para afinarlo.
  */
 function estimateConsumption(
   own: EnrichedRecord[],
@@ -520,11 +550,16 @@ function estimateConsumption(
     runs[runs.length - 1].push(record);
   }
 
+  /**
+   * La semilla es la primera corrida y no un array vacío: con una sola carga
+   * todas las corridas miden 0 km, ninguna gana la comparación y la nota
+   * terminaba hablando de "0 cargas seguidas" cuando había una.
+   */
   const run = runs.reduce((best, current) => {
     const span = (list: EnrichedRecord[]) =>
       list.length > 1 ? list[list.length - 1].odometer - list[0].odometer : 0;
     return span(current) > span(best) ? current : best;
-  }, [] as EnrichedRecord[]);
+  }, runs[0] ?? []);
 
   if (run.length < MIN_ESTIMATE_FILLS) {
     return noEstimate(
@@ -554,20 +589,23 @@ function estimateConsumption(
   const consumption = (quantity / distance) * 100;
   const margin = (levelBound / distance) * 100;
 
+  /**
+   * Cuántos kilómetros más de cargas seguidas harían falta para que el margen
+   * entre en el umbral de precisión. El margen es inversamente proporcional a la
+   * distancia, así que la cuenta es directa.
+   */
+  const kmToPrecise = Math.max(
+    0,
+    round((levelBound * 100) / (consumption * PRECISE_ESTIMATE_MARGIN_RATIO) - distance, 0),
+  );
+
   if (margin > consumption * MAX_ESTIMATE_MARGIN_RATIO) {
-    /**
-     * Cuántos kilómetros más de cargas seguidas harían falta para que el margen
-     * entre en el umbral. El margen es inversamente proporcional a la distancia,
-     * así que la cuenta es directa.
-     */
-    const needed = Math.max(
-      0,
-      round((levelBound * 100) / (consumption * MAX_ESTIMATE_MARGIN_RATIO) - distance, 0),
-    );
     return noEstimate(
-      `Con ${formatKm(distance)} de cargas parciales el margen de error todavía es de ±${formatNumber(margin, 1)}, demasiado para publicar un número. Harían falta unos ${formatKm(needed)} más de cargas seguidas —o una carga a tanque lleno, que lo mide exacto de una.`,
+      `Con ${formatKm(distance)} de cargas parciales el margen de error es de ±${formatNumber(margin, 1)}: tan ancho que el consumo podría ser casi cualquiera, así que el número no diría nada. Harían falta unos ${formatKm(kmToPrecise)} más de cargas seguidas —o una carga a tanque lleno, que lo mide exacto de una.`,
     );
   }
+
+  const lowPrecision = margin > consumption * PRECISE_ESTIMATE_MARGIN_RATIO;
 
   return {
     consumption: round(consumption, 2),
@@ -575,6 +613,8 @@ function estimateConsumption(
     margin: round(margin, 2),
     distance,
     fills: run.length,
+    lowPrecision,
+    kmToPrecise: lowPrecision ? kmToPrecise : null,
     note: null,
   };
 }
@@ -668,6 +708,8 @@ function buildFuelPerformance(
         estimatedMargin: estimate.margin,
         estimatedDistance: estimate.distance,
         estimatedFills: estimate.fills,
+        estimatedLowPrecision: estimate.lowPrecision,
+        estimatedKmToPrecise: estimate.kmToPrecise,
         estimationNote: estimate.note,
 
         consumptionSeries: ownByDate
@@ -986,6 +1028,8 @@ export function computeVehicleStats(vehicle: Vehicle, rawRecords: FuelRecord[]):
     estimatedMargin: primaryFuel?.estimatedMargin ?? null,
     estimatedDistance: primaryFuel?.estimatedDistance ?? 0,
     estimatedFills: primaryFuel?.estimatedFills ?? 0,
+    estimatedLowPrecision: primaryFuel?.estimatedLowPrecision ?? false,
+    estimatedKmToPrecise: primaryFuel?.estimatedKmToPrecise ?? null,
     estimationNote: primaryFuel?.estimationNote ?? null,
 
     costPerKm: costPerKm !== null ? round(costPerKm, 2) : null,

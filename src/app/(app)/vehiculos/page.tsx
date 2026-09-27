@@ -78,7 +78,12 @@ export default async function VehiclesPage() {
                       <dd className="tabular mt-0.5 text-sm font-semibold text-ink-100">
                         {vehicleStats?.avgConsumption
                           ? `${formatNumber(vehicleStats.avgConsumption, 2)} ${vehicleStats.consumptionUnit}`
-                          : "—"}
+                          : vehicleStats?.estimatedConsumption
+                            ? `≈ ${formatNumber(vehicleStats.estimatedConsumption, 2)} ± ${formatNumber(
+                                vehicleStats.estimatedMargin,
+                                2,
+                              )} ${vehicleStats.consumptionUnit}`
+                            : "—"}
                       </dd>
                     </div>
                     <div>

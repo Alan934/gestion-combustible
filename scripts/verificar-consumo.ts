@@ -186,28 +186,57 @@ console.log("\n6) Sólo cargas parciales, ventana larga: se estima con margen\n"
   comprobar("el margen es 42,5 L sobre 5500 km = ±0,77", stats.estimatedMargin, 0.77);
   comprobar("la ventana abarca 5500 km", stats.estimatedDistance, 5500);
   comprobar("y las 12 cargas", stats.estimatedFills, 12);
+  comprobar("la ventana es larga: precisión normal", stats.estimatedLowPrecision, false);
+  comprobar("y no falta nada para afinarlo", stats.estimatedKmToPrecise, null);
   comprobar("si hay número, no hay nota de por qué falta", stats.estimationNote, null);
 }
 
-console.log("\n7) Sólo cargas parciales, ventana corta: el margen es demasiado ancho\n");
+console.log("\n7) Sólo cargas parciales, ventana corta: sale con precisión baja\n");
 {
   contador = 0;
-  // Mismo consumo real (8,5) pero sobre 1600 km: margen ±2,13 sobre un umbral
-  // de 8,5 × 15% = 1,275. No se publica.
+  // Mismo consumo real (8,5) pero sobre 1600 km: margen ±2,13, el 25% del
+  // consumo. Pasa el umbral de precisión (15%) pero no el techo de lo publicable
+  // (50%), así que el número sale marcado como flojo y con los km que faltan.
   const stats = computeVehicleStats(vehiculo(), parciales(5, 400, 34));
 
-  comprobar("no se publica el estimado", stats.estimatedConsumption, null);
-  comprobar("tampoco el margen", stats.estimatedMargin, null);
-  comprobar("explica por qué y cuántos km faltan", stats.estimationNote?.includes("1.067"), true);
+  comprobar("el estimado se publica igual", stats.estimatedConsumption, 8.5);
+  comprobar("con el margen ancho adentro", stats.estimatedMargin, 2.13);
+  comprobar("marcado como de precisión baja", stats.estimatedLowPrecision, true);
+  comprobar("y con los km que faltan para afinarlo", stats.estimatedKmToPrecise, 1067);
+  comprobar("si hay número, no hay nota de por qué falta", stats.estimationNote, null);
+
+  contador = 0;
+  // Una carga grande al principio y tres chicas: el nivel del tanque pudo
+  // haberse movido 60 L en 300 km. El margen (±20) duplica al consumo (10) y el
+  // rango incluiría el cero: ahí el número no dice nada y no se publica.
+  const absurdo = computeVehicleStats(vehiculo(), [
+    carga(5000, 60, { lleno: false }),
+    carga(5100, 10, { lleno: false }),
+    carga(5200, 10, { lleno: false }),
+    carga(5300, 10, { lleno: false }),
+  ]);
+
+  comprobar("con el margen más ancho que el consumo no sale", absurdo.estimatedConsumption, null);
+  comprobar("tampoco el margen", absurdo.estimatedMargin, null);
+  comprobar("explica por qué y cuántos km faltan", absurdo.estimationNote?.includes("3.700"), true);
 }
 
-console.log("\n8) Dos cargas parciales: ni se intenta\n");
+console.log("\n8) Una o dos cargas parciales: ni se intenta\n");
 {
   contador = 0;
   const stats = computeVehicleStats(vehiculo(), parciales(2, 500, 42.5));
 
   comprobar("sin estimado", stats.estimatedConsumption, null);
   comprobar("avisa que faltan cargas", stats.estimationNote?.includes("2 cargas seguidas"), true);
+
+  contador = 0;
+  const una = computeVehicleStats(vehiculo(), parciales(1, 500, 42.5));
+
+  comprobar(
+    "con una sola carga la cuenta bien (no dice 0)",
+    una.estimationNote?.includes("1 carga seguida"),
+    true,
+  );
 }
 
 console.log("\n9) El estimado nunca compite con una medición real\n");
