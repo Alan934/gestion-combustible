@@ -11,6 +11,10 @@ import type { GoogleGenAI } from "@google/genai";
  * de candidatos. Si la consulta falla quedan los alias `-latest`, y si un modelo
  * muere en pleno uso se lo marca como jubilado y se sigue con el siguiente sin
  * tocar el código.
+ *
+ * Las cuotas de la capa gratuita son por modelo, así que el mismo mecanismo sirve
+ * cuando un modelo se queda sin pedidos: se lo aparta un rato y se sigue con el
+ * que viene.
  */
 
 /** Cuánto vale la lista de modelos antes de volver a preguntarle a Google. */
@@ -28,8 +32,12 @@ const MAX_CANDIDATES = 4;
  */
 const STATIC_CANDIDATES = ["gemini-flash-latest", "gemini-pro-latest"];
 
-/** Prioridad por familia: flash alcanza para leer tickets y es la más barata. */
-const FAMILY_RANK: Record<string, number> = { flash: 0, pro: 1, "flash-lite": 2 };
+/**
+ * Prioridad por familia: flash lee bien los tickets, flash-lite es el respaldo
+ * barato (y con límites gratuitos más holgados) y pro va último porque desde
+ * abril de 2026 no entra en la capa gratuita.
+ */
+const FAMILY_RANK: Record<string, number> = { flash: 0, "flash-lite": 1, pro: 2 };
 
 /**
  * `gemini-3.7-flash` sí, `gemini-3.7-flash-preview-11-2025` no: sólo entran los
@@ -50,6 +58,8 @@ let cache: { candidates: string[]; fetchedAt: number } | null = null;
 let pending: Promise<string[]> | null = null;
 /** Modelos que ya devolvieron 404 en este proceso. */
 const retired = new Set<string>();
+/** Modelos sin cuota: nombre → momento (epoch ms) en que vuelve a tener sentido probarlos. */
+const exhausted = new Map<string, number>();
 /** Último modelo que anduvo: se prueba primero para no volver a tantear. */
 let working: string | null = null;
 
@@ -63,6 +73,49 @@ export function markRetired(model: string) {
 /** Recuerda el modelo que respondió bien para arrancar por ahí la próxima vez. */
 export function rememberWorking(model: string) {
   working = model;
+  exhausted.delete(model);
+}
+
+/** Aparta un modelo que se quedó sin cuota hasta que Google la libere. */
+export function markExhausted(model: string, retryAfterMs: number) {
+  exhausted.set(model, Date.now() + retryAfterMs);
+  if (working === model) working = null;
+}
+
+function hasQuota(model: string) {
+  const until = exhausted.get(model);
+  if (until === undefined) return true;
+  if (Date.now() < until) return false;
+  exhausted.delete(model);
+  return true;
+}
+
+/** 429: no es que el modelo no exista, es que se acabaron los pedidos permitidos. */
+export function isQuotaError(message: string) {
+  return /quota|rate limit|RESOURCE_EXHAUSTED|\b429\b/i.test(message);
+}
+
+/**
+ * Cuánto hay que esperar para que el modelo vuelva a tener cuota. Google manda
+ * un `retryDelay` cuando el límite es por minuto; los diarios no lo traen y se
+ * estiman hasta la medianoche del Pacífico, que es cuando resetean.
+ */
+export function quotaRetryMs(message: string) {
+  // El límite diario manda aunque Google sugiera reintentar en unos segundos.
+  if (/per.?day/i.test(message)) return msHastaMedianochePacifico();
+  // El campo llega dentro de un JSON que a veces viene escapado: se busca flojo.
+  const delay = /retryDelay[^0-9]{0,10}(\d+(?:\.\d+)?)s/i.exec(message);
+  if (delay) return Math.ceil(Number(delay[1]) * 1000);
+  return 60_000;
+}
+
+/** Las cuotas diarias de Gemini resetean a la medianoche del Pacífico. */
+function msHastaMedianochePacifico() {
+  const ahora = new Date();
+  const pacifico = new Date(ahora.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const transcurrido =
+    pacifico.getHours() * 3_600_000 + pacifico.getMinutes() * 60_000 + pacifico.getSeconds() * 1000;
+  return 86_400_000 - transcurrido;
 }
 
 /** 404 y parientes: ese nombre de modelo ya no existe, reintentarlo no sirve. */
@@ -94,7 +147,7 @@ export async function resolveModels(ai: GoogleGenAI) {
     (model): model is string => Boolean(model),
   );
 
-  return [...new Set(ordered)].filter((model) => !retired.has(model));
+  return [...new Set(ordered)].filter((model) => !retired.has(model) && hasQuota(model));
 }
 
 async function discover(ai: GoogleGenAI) {

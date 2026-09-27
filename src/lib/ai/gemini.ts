@@ -6,8 +6,11 @@ import type { Schema } from "@google/genai";
 import { FUEL_TYPE_IDS, PAYMENT_METHOD_IDS, STATIONS } from "@/lib/catalogs";
 
 import {
+  isQuotaError,
   isRetiredModel,
+  markExhausted,
   markRetired,
+  quotaRetryMs,
   rememberWorking,
   resolveModels,
   suggestedModels,
@@ -25,6 +28,13 @@ import type { ExtractedReceipt, VerifiedReceipt } from "./receipt";
 
 /** Qué modelo usar lo decide `./models`: acá no hay ningún nombre escrito a mano. */
 const ATTEMPTS_PER_MODEL = 2;
+/**
+ * Tope de llamadas por escaneo. En la capa gratuita el límite es por cantidad de
+ * pedidos, así que insistir de más es justamente lo que deja sin cuota.
+ */
+const MAX_CALLS = 5;
+/** Si la cuota se libera en menos que esto conviene esperar y no cambiar de modelo. */
+const SHORT_WAIT_MS = 10_000;
 
 export type ReceiptImage = {
   mimeType: string;
@@ -184,6 +194,15 @@ function sanitize(raw: Record<string, unknown>): ExtractedReceipt {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Convierte una espera en algo que se pueda leer en pantalla. */
+function describeWait(ms: number) {
+  const segundos = Math.ceil(ms / 1000);
+  if (segundos <= 90) return `unos ${segundos} segundos`;
+  const minutos = Math.round(segundos / 60);
+  if (minutos <= 90) return `unos ${minutos} minutos`;
+  return `unas ${Math.round(minutos / 60)} horas`;
+}
+
 /** El modelo está momentáneamente saturado: reintentar sirve. */
 function isOverloaded(message: string) {
   return /UNAVAILABLE|503|high demand|overloaded|deadline|ETIMEDOUT|ECONNRESET|fetch failed/i.test(
@@ -208,16 +227,20 @@ async function generate(images: ReceiptImage[]) {
   ];
 
   const tried = new Set<string>();
+  let calls = 0;
   let lastOverloadMessage = "";
   let lastRetiredMessage = "";
+  let lastQuotaMessage = "";
+  let shortestQuotaWait = Number.POSITIVE_INFINITY;
 
-  while (queue.length) {
+  while (queue.length && calls < MAX_CALLS) {
     const model = queue.shift()!;
     if (tried.has(model)) continue;
     tried.add(model);
 
-    for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
+    for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL && calls < MAX_CALLS; attempt++) {
       try {
+        calls++;
         const response = await ai.models.generateContent({
           model,
           contents: [{ role: "user", parts }],
@@ -233,17 +256,24 @@ async function generate(images: ReceiptImage[]) {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
-        if (/quota|rate limit|RESOURCE_EXHAUSTED|429/i.test(message)) {
-          throw new ReceiptExtractionError(
-            "Se agotó la cuota gratuita de Gemini por ahora. Probá de nuevo en un rato o cargá el ticket a mano.",
-            error,
-          );
-        }
         if (/API.?key|API_KEY_INVALID|PERMISSION_DENIED|401|403/i.test(message)) {
           throw new ReceiptExtractionError(
             "La clave de Gemini fue rechazada. Revisá GEMINI_API_KEY en el .env.",
             error,
           );
+        }
+        if (isQuotaError(message)) {
+          // Las cuotas son por modelo: el siguiente candidato suele tener la suya.
+          const wait = quotaRetryMs(message);
+          lastQuotaMessage = message;
+          shortestQuotaWait = Math.min(shortestQuotaWait, wait);
+          console.warn(`[leer-ticket] ${model} sin cuota (se libera en ~${Math.round(wait / 1000)} s)`);
+          if (wait <= SHORT_WAIT_MS && attempt < ATTEMPTS_PER_MODEL && calls < MAX_CALLS) {
+            await sleep(wait + 500);
+            continue;
+          }
+          markExhausted(model, wait);
+          break;
         }
         if (isRetiredModel(message)) {
           lastRetiredMessage = message;
@@ -269,6 +299,12 @@ async function generate(images: ReceiptImage[]) {
     }
   }
 
+  if (shortestQuotaWait < Number.POSITIVE_INFINITY) {
+    throw new ReceiptExtractionError(
+      `Se agotó la cuota gratuita de Gemini en todos los modelos disponibles. Se libera en ${describeWait(shortestQuotaWait)}; mientras tanto podés cargar el ticket a mano.`,
+      lastQuotaMessage,
+    );
+  }
   if (lastRetiredMessage) {
     throw new ReceiptExtractionError(
       "Ningún modelo de Gemini disponible aceptó la consulta. Puede que haga falta actualizar la librería @google/genai, o que GEMINI_MODEL apunte a un modelo que ya no existe.",

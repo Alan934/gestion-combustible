@@ -206,10 +206,14 @@ en el `.env`:
 
 ```env
 GEMINI_API_KEY=tu-clave
-GEMINI_MODEL=gemini-3.7-flash   # opcional
+GEMINI_MODEL=   # opcional: vacío = elección automática
 ```
 
 Sin esa variable la app funciona igual, sólo que el panel no aparece.
+
+No hace falta elegir modelo: la app le pregunta a Google cuáles hay disponibles y
+se queda con el flash estable más nuevo. `npm run test:modelos` muestra qué
+encontró y en qué orden los va a probar.
 
 ### Por qué un modelo de visión y no OCR
 
@@ -245,9 +249,18 @@ aritmética detecta si el modelo agarró el otro.
   cargás de a uno. La deduplicación va por número de comprobante.
 - **Las fotos se reducen en el navegador** a 1600 px de lado mayor antes de subir:
   una foto de celular pasa de ~4 MB a ~300 KB sin perder legibilidad.
-- **Reintentos y modelo de respaldo.** La capa gratuita devuelve 503 cuando el
-  modelo está saturado; se reintenta con espera creciente y se cae a
-  `gemini-2.5-flash` si hace falta.
+- **El modelo se resuelve solo.** No hay nombres de modelo escritos en el código
+  ([`src/lib/ai/models.ts`](src/lib/ai/models.ts)): se consulta el catálogo de la
+  API, se descartan los preview y se arma una lista de candidatos ordenada por
+  familia (flash → flash-lite → pro) y versión, cacheada 6 horas.
+- **Se banca que jubilen un modelo.** Cuando Google da de baja uno, la respuesta
+  404 nombra al reemplazo: se lo marca como jubilado, se toma la sugerencia y se
+  sigue sin tocar el código.
+- **Las cuotas son por modelo.** Ante un 429 se aparta ese modelo el tiempo que
+  indique el error (o hasta la medianoche del Pacífico si el límite es diario) y
+  se sigue con el siguiente candidato, así un límite diario no deja sin escáner.
+  Los 503 por saturación se reintentan con espera creciente, con un tope de
+  llamadas por escaneo para no gastar la cuota en reintentos.
 - **Las imágenes no se guardan.** Se usan para extraer y se descartan.
 
 Todo lo específico del proveedor vive en [`src/lib/ai/gemini.ts`](src/lib/ai/gemini.ts).
