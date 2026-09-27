@@ -9,6 +9,7 @@ import {
   MonthlySpendChart,
   PriceEvolutionChart,
 } from "@/components/charts";
+import { FuelConsumptionCards } from "@/components/fuel-consumption-cards";
 import { InsightsList } from "@/components/insights-list";
 import { Card, CardHeader, ColorDot, EmptyState, PageHeader, StatCard } from "@/components/ui";
 import { requireSession } from "@/lib/auth/session";
@@ -110,13 +111,15 @@ export default async function StatisticsPage({
   const quantityWord = unit === "L" ? "litros" : (unit ?? "cantidad");
   const mixedUnits = unit === null;
 
-  /* Consumo del contexto: medido si lo hay, estimado si sólo hay parciales. */
-  const consumption = selected?.avgConsumption ?? summary.avgConsumption;
-  const estimated = selected ? selected.estimatedConsumption : summary.estimatedConsumption;
-  const estimatedMargin = selected ? selected.estimatedMargin : summary.estimatedMargin;
-  const estimatedLowPrecision = selected
-    ? selected.estimatedLowPrecision
-    : summary.estimatedLowPrecision;
+  /**
+   * Consumo del vehículo elegido: medido si lo hay, estimado si sólo tiene
+   * cargas parciales. Sin vehículo elegido el consumo va por combustible
+   * (`byFuelConsumption`), porque la flota no tiene un número único.
+   */
+  const consumption = selected?.avgConsumption ?? null;
+  const estimated = selected?.estimatedConsumption ?? null;
+  const estimatedMargin = selected?.estimatedMargin ?? null;
+  const estimatedLowPrecision = selected?.estimatedLowPrecision ?? false;
 
   /* Cuando hay un vehículo elegido se usan sus series; si no, las de toda la flota. */
   const monthly = selected ? selected.monthly : summary.monthly;
@@ -181,28 +184,28 @@ export default async function StatisticsPage({
       <div className="grid grid-cols-1 gap-6">
         {/* -------------------------------- KPIs -------------------------------- */}
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            label="Consumo promedio"
-            value={
-              consumption
-                ? `${formatNumber(consumption, 2)} ${consumptionUnit}`
-                : estimated
-                  ? `≈ ${formatNumber(estimated, 2)} ${consumptionUnit}`
-                  : "—"
-            }
-            hint={
-              estimated && !consumption
-                ? `± ${formatNumber(estimatedMargin, 2)}${
-                    estimatedLowPrecision ? " · precisión baja" : ""
-                  } · estimado sin tanque lleno`
-                : selected
-                  ? `Mejor tramo: ${selected.bestConsumption ? formatNumber(selected.bestConsumption, 2) : "—"}`
-                  : mixedUnits
-                    ? "Tus vehículos usan unidades distintas: elegí uno para verlo"
-                    : undefined
-            }
-            accent="#22d3ee"
-          />
+          {selected ? (
+            <StatCard
+              label="Consumo promedio"
+              value={
+                consumption
+                  ? `${formatNumber(consumption, 2)} ${consumptionUnit}`
+                  : estimated
+                    ? `≈ ${formatNumber(estimated, 2)} ${consumptionUnit}`
+                    : "—"
+              }
+              hint={
+                estimated && !consumption
+                  ? `± ${formatNumber(estimatedMargin, 2)}${
+                      estimatedLowPrecision ? " · precisión baja" : ""
+                    } · estimado sin tanque lleno`
+                  : `Mejor tramo: ${selected.bestConsumption ? formatNumber(selected.bestConsumption, 2) : "—"}`
+              }
+              accent="#22d3ee"
+            />
+          ) : (
+            <FuelConsumptionCards fuels={summary.byFuelConsumption} />
+          )}
           <StatCard
             label="Costo por kilómetro"
             value={

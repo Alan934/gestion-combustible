@@ -54,6 +54,13 @@ export type FuelPerformance = {
   costPerKm: number | null;
   measuredDistance: number;
   /**
+   * Cantidad efectivamente consumida en los tramos medidos. Va de la mano de
+   * `measuredDistance`: son los dos términos del promedio, y sumarlos entre
+   * vehículos es lo que permite un promedio de flota que no sea el promedio de
+   * los promedios.
+   */
+  measuredQuantity: number;
+  /**
    * Tramos descartados por haber tenido cargas del otro combustible en el medio.
    * Si son muchos y no hay ninguno limpio, este combustible no tiene consumo
    * medible todavía.
@@ -701,6 +708,7 @@ function buildFuelPerformance(
         avgKmPerUnit: avgKmPerUnit !== null ? round(avgKmPerUnit, 2) : null,
         costPerKm: safeDiv(measuredCost, measuredDistance),
         measuredDistance,
+        measuredQuantity,
         excludedLegs: own.filter((r) => r.legHasOtherFuel).length,
 
         estimatedConsumption: estimate.consumption,
@@ -1075,6 +1083,129 @@ export function computeVehicleStats(vehicle: Vehicle, rawRecords: FuelRecord[]):
 /*                         Resumen combinado (toda la flota)                   */
 /* -------------------------------------------------------------------------- */
 
+/** El consumo de la flota para un combustible, con su unidad y sus reglas. */
+export type FleetFuelConsumption = {
+  fuelTypeId: string;
+  label: string;
+  short: string;
+  color: string;
+  unit: string;
+  consumptionUnit: string;
+  efficiencyUnit: string;
+  /** Vehículos de la flota que cargan este combustible. */
+  vehicles: number;
+
+  /** Promedio medido lleno a lleno, o `null` si ninguno llegó a medir. */
+  avgConsumption: number | null;
+  avgKmPerUnit: number | null;
+  measuredDistance: number;
+
+  /* Estimado por cargas parciales. Nunca convive con el medido. */
+  estimatedConsumption: number | null;
+  estimatedMargin: number | null;
+  estimatedLowPrecision: boolean;
+  estimatedDistance: number;
+};
+
+/**
+ * Un promedio por combustible en lugar de uno solo para toda la flota.
+ *
+ * Sumar litros de nafta con m³ de GNC no da nada, y por eso el consumo de flota
+ * quedaba vacío apenas aparecía un vehículo a gas. Pero los vehículos que cargan
+ * lo mismo sí se pueden juntar: los kilómetros medidos y la cantidad consumida
+ * se suman entre ellos y salen tantos promedios como combustibles haya en la
+ * flota. No es el promedio de los promedios —eso le daría el mismo peso a un
+ * vehículo con 200 km medidos que a uno con 20.000—, es el cociente de las
+ * sumas.
+ *
+ * Dentro de cada combustible rige la misma regla que dentro de un vehículo: si
+ * alguno llegó a medir lleno a lleno, ese número manda y el estimado no compite;
+ * si ninguno midió, se combinan los estimados sumando las cotas de nivel de
+ * tanque (ver `estimateConsumption`).
+ */
+function buildFleetFuelConsumption(stats: VehicleStats[]): FleetFuelConsumption[] {
+  type Bucket = {
+    vehicles: number;
+    spent: number;
+    measuredDistance: number;
+    measuredQuantity: number;
+    estimatedDistance: number;
+    estimatedQuantity: number;
+    estimatedLevelBound: number;
+  };
+
+  const buckets = new Map<string, Bucket>();
+
+  for (const vehicleStats of stats) {
+    for (const fuel of vehicleStats.fuelPerformance) {
+      const bucket: Bucket = buckets.get(fuel.fuelTypeId) ?? {
+        vehicles: 0,
+        spent: 0,
+        measuredDistance: 0,
+        measuredQuantity: 0,
+        estimatedDistance: 0,
+        estimatedQuantity: 0,
+        estimatedLevelBound: 0,
+      };
+
+      bucket.vehicles += 1;
+      bucket.spent += fuel.spent;
+      bucket.measuredDistance += fuel.measuredDistance;
+      bucket.measuredQuantity += fuel.measuredQuantity;
+
+      if (fuel.estimatedConsumption !== null) {
+        bucket.estimatedDistance += fuel.estimatedDistance;
+        bucket.estimatedQuantity += (fuel.estimatedConsumption * fuel.estimatedDistance) / 100;
+        bucket.estimatedLevelBound += ((fuel.estimatedMargin ?? 0) * fuel.estimatedDistance) / 100;
+      }
+
+      buckets.set(fuel.fuelTypeId, bucket);
+    }
+  }
+
+  return [...buckets.entries()]
+    .sort(([, a], [, b]) => b.spent - a.spent)
+    .map(([fuelTypeId, bucket]) => {
+      const info = fuelType(fuelTypeId);
+      const measured = bucket.measuredDistance > 0 && bucket.measuredQuantity > 0;
+      const canEstimate = !measured && bucket.estimatedDistance > 0;
+
+      const estimatedConsumption = canEstimate
+        ? round((bucket.estimatedQuantity / bucket.estimatedDistance) * 100, 2)
+        : null;
+      const estimatedMargin = canEstimate
+        ? round((bucket.estimatedLevelBound / bucket.estimatedDistance) * 100, 2)
+        : null;
+
+      return {
+        fuelTypeId,
+        label: info.label,
+        short: info.short,
+        color: info.color,
+        unit: info.unit,
+        consumptionUnit: `${info.unit}/100km`,
+        efficiencyUnit: `km/${info.unit}`,
+        vehicles: bucket.vehicles,
+
+        avgConsumption: measured
+          ? round((bucket.measuredQuantity / bucket.measuredDistance) * 100, 2)
+          : null,
+        avgKmPerUnit: measured
+          ? round(bucket.measuredDistance / bucket.measuredQuantity, 2)
+          : null,
+        measuredDistance: round(bucket.measuredDistance, 1),
+
+        estimatedConsumption,
+        estimatedMargin,
+        estimatedLowPrecision:
+          estimatedConsumption !== null &&
+          estimatedMargin !== null &&
+          estimatedMargin > estimatedConsumption * PRECISE_ESTIMATE_MARGIN_RATIO,
+        estimatedDistance: canEstimate ? round(bucket.estimatedDistance, 1) : 0,
+      };
+    });
+}
+
 export type FleetSummary = {
   vehicles: number;
   fills: number;
@@ -1082,23 +1213,17 @@ export type FleetSummary = {
   /**
    * Unidad común a toda la flota, o `null` si hay vehículos que cargan en
    * unidades distintas (nafta en litros y GNC en m³, por ejemplo). Cuando es
-   * `null`, los totales de cantidad y el consumo promedio no se pueden sumar
-   * y quedan en `null`.
+   * `null`, los totales de cantidad no se pueden sumar y quedan en `null`.
    */
   unit: string | null;
   totalLiters: number | null;
   totalDistance: number;
-  avgConsumption: number | null;
   /**
-   * Consumo estimado de la flota, cuando ningún vehículo tiene todavía un tramo
-   * lleno a lleno. Igual que en el detalle, nunca convive con `avgConsumption`
-   * y nunca viaja sin `estimatedMargin`.
+   * El consumo de la flota, un promedio por combustible presente. No hay un
+   * número único: es el único corte donde las unidades coinciden y los
+   * kilómetros se pueden sumar. Ver `buildFleetFuelConsumption`.
    */
-  estimatedConsumption: number | null;
-  estimatedMargin: number | null;
-  estimatedLowPrecision: boolean;
-  /** Kilómetros que abarcan las ventanas estimadas sumadas. */
-  estimatedDistance: number;
+  byFuelConsumption: FleetFuelConsumption[];
   costPerKm: number | null;
   avgPricePerLiter: number | null;
   lastPricePerLiter: number | null;
@@ -1119,7 +1244,8 @@ export function computeFleetSummary(stats: VehicleStats[]): FleetSummary {
    * Sumar litros de nafta con m³ de GNC daría un número sin significado, así que
    * los agregados de cantidad sólo existen si toda la flota comparte la unidad.
    * El gasto y el costo por kilómetro, en cambio, siempre son pesos: se suman
-   * sin problema.
+   * sin problema. El consumo no pasa por acá: va por combustible, que es donde
+   * las unidades coinciden siempre.
    */
   const units = new Set(stats.filter((s) => s.fills > 0).map((s) => s.unit));
   const hasMixedUnits = units.size > 1;
@@ -1139,46 +1265,6 @@ export function computeFleetSummary(stats: VehicleStats[]): FleetSummary {
     stats.reduce((sum, s) => sum + s.totalDistance, 0),
     1,
   );
-  const measuredDistance = stats.reduce((sum, s) => sum + s.measuredDistance, 0);
-  const measuredLiters = stats.reduce((sum, s) => sum + s.measuredLiters, 0);
-
-  /**
-   * Estimación combinada: se arma sólo cuando no hay ni un tramo lleno a lleno
-   * en toda la flota. Un promedio medido y uno estimado no se promedian entre
-   * sí —±1 L contra ±40 L—, la misma regla que dentro de cada vehículo.
-   *
-   * Los márgenes no se promedian, se suman: cada vehículo aporta su propia cota
-   * de variación de nivel de tanque (margen × km ÷ 100) y el margen combinado es
-   * la suma de esas cotas sobre el total de kilómetros estimados. Sumar vehículos
-   * no achica la incertidumbre —cada tanque esconde la suya—, así que el margen
-   * relativo de la flota queda entre el mejor y el peor de los vehículos; lo que
-   * lo cierra es que cada uno acumule kilómetros, no que haya más vehículos.
-   */
-  const estimatedVehicles = stats.filter((s) => s.estimatedConsumption !== null);
-  const estimatedDistance = round(
-    estimatedVehicles.reduce((sum, s) => sum + s.estimatedDistance, 0),
-    1,
-  );
-  const estimatedQuantity = estimatedVehicles.reduce(
-    (sum, s) => sum + (s.estimatedConsumption! * s.estimatedDistance) / 100,
-    0,
-  );
-  const estimatedLevelBound = estimatedVehicles.reduce(
-    (sum, s) => sum + ((s.estimatedMargin ?? 0) * s.estimatedDistance) / 100,
-    0,
-  );
-
-  const canEstimate = !hasMixedUnits && measuredDistance <= 0 && estimatedDistance > 0;
-  const estimatedConsumption = canEstimate
-    ? round((estimatedQuantity / estimatedDistance) * 100, 2)
-    : null;
-  const estimatedMargin = canEstimate
-    ? round((estimatedLevelBound / estimatedDistance) * 100, 2)
-    : null;
-  const estimatedLowPrecision =
-    estimatedConsumption !== null &&
-    estimatedMargin !== null &&
-    estimatedMargin > estimatedConsumption * PRECISE_ESTIMATE_MARGIN_RATIO;
 
   /* Series mensuales combinadas */
   const monthlyMap = new Map<string, MonthlyPoint>();
@@ -1248,14 +1334,7 @@ export function computeFleetSummary(stats: VehicleStats[]): FleetSummary {
     unit,
     totalLiters,
     totalDistance,
-    avgConsumption:
-      !hasMixedUnits && measuredDistance > 0
-        ? round((measuredLiters / measuredDistance) * 100, 2)
-        : null,
-    estimatedConsumption,
-    estimatedMargin,
-    estimatedLowPrecision,
-    estimatedDistance: canEstimate ? estimatedDistance : 0,
+    byFuelConsumption: buildFleetFuelConsumption(stats),
     // El costo por kilómetro son pesos sobre kilómetros: vale siempre, mezcle
     // o no la flota combustibles distintos.
     costPerKm: totalDistance > 0 ? round(totalSpent / totalDistance, 2) : null,

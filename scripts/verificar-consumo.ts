@@ -392,36 +392,56 @@ console.log("\n18) El margen del estimado juega a favor: la duda no dispara alar
   comprobar("y ahí sí se alarma", tieneInsight(lejos, "implausible-consumption"), true);
 }
 
-console.log("\n19) La flota estima cuando ningún vehículo llegó a medir de verdad\n");
+console.log("\n19) La flota promedia por combustible, no todo junto\n");
 {
   contador = 0;
-  const parcial = computeVehicleStats(vehiculo(), parciales(5, 400, 34));
-
-  contador = 0;
-  const conLleno = computeVehicleStats(vehiculo({ name: "Otro" }), [
+  const naftero = computeVehicleStats(vehiculo({ name: "Naftero" }), [
     carga(5000, 50),
-    carga(5500, 40), // 500 km con 40 L = 8 L/100km medidos
+    carga(5500, 40), // 500 km con 40 L = 8 L/100km
   ]);
 
-  const soloParciales = computeFleetSummary([parcial]);
+  contador = 0;
+  const otroNaftero = computeVehicleStats(vehiculo({ name: "Otro naftero" }), [
+    carga(9000, 50),
+    carga(10500, 150), // 1500 km con 150 L = 10 L/100km
+  ]);
+
+  contador = 0;
+  const gasero = computeVehicleStats(
+    vehiculo({ name: "Gasero", fuelType: "gnc", tankCapacity: 14 }),
+    [
+      carga(3000, 13, { combustible: "gnc" }),
+      carga(3120, 12, { combustible: "gnc" }), // 120 km con 12 m³ = 10 m³/100km
+    ],
+  );
+
+  const flota = computeFleetSummary([naftero, otroNaftero, gasero]);
+  const [nafta, gnc] = flota.byFuelConsumption;
+
+  comprobar("dos combustibles en la flota, dos promedios", flota.byFuelConsumption.length, 2);
+  comprobar("el primero es la nafta (más gasto)", nafta.fuelTypeId, "nafta_super");
+  comprobar("junta los dos vehículos nafteros", nafta.vehicles, 2);
+  // 190 L sobre 2000 km. El promedio de los promedios daría 9: el vehículo que
+  // más anduvo pesa más, y por eso se dividen las sumas y no se promedian.
+  comprobar("y no es el promedio de los promedios", nafta.avgConsumption, 9.5);
+  comprobar("sobre los kilómetros medidos de los dos", nafta.measuredDistance, 2000);
+  comprobar("el GNC va aparte, en su unidad", gnc.fuelTypeId, "gnc");
+  comprobar("con su propio promedio", gnc.avgConsumption, 10);
+  comprobar("y su unidad de consumo", gnc.consumptionUnit, "m³/100km");
+
+  contador = 0;
+  const parcial = computeVehicleStats(vehiculo({ name: "Parcial" }), parciales(5, 400, 34));
+  const [soloParciales] = computeFleetSummary([parcial]).byFuelConsumption;
 
   comprobar("sin tramos reales no hay promedio medido", soloParciales.avgConsumption, null);
-  comprobar("la flota hereda el estimado del vehículo", soloParciales.estimatedConsumption, 8.5);
+  comprobar("el combustible hereda el estimado", soloParciales.estimatedConsumption, 8.5);
   comprobar("con su margen", soloParciales.estimatedMargin, 2.13);
   comprobar("y el aviso de precisión baja", soloParciales.estimatedLowPrecision, true);
 
-  // Dos ventanas idénticas: las cotas y los kilómetros se duplican igual, así
-  // que el margen relativo no se mueve. Sumar vehículos no achica la duda.
-  const dosParciales = computeFleetSummary([parcial, parcial]);
+  const [mixto] = computeFleetSummary([parcial, naftero]).byFuelConsumption;
 
-  comprobar("dos vehículos estimados dan el mismo consumo", dosParciales.estimatedConsumption, 8.5);
-  comprobar("y el mismo margen", dosParciales.estimatedMargin, 2.13);
-  comprobar("sobre el doble de kilómetros", dosParciales.estimatedDistance, 3200);
-
-  const mixta = computeFleetSummary([parcial, conLleno]);
-
-  comprobar("si alguno mide de verdad, el promedio sale de eso", mixta.avgConsumption, 8);
-  comprobar("y el estimado no compite", mixta.estimatedConsumption, null);
+  comprobar("si alguno del mismo combustible mide, manda lo medido", mixto.avgConsumption, 8);
+  comprobar("y el estimado no compite", mixto.estimatedConsumption, null);
 }
 
 console.log(

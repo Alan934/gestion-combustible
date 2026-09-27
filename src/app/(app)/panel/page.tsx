@@ -7,6 +7,7 @@ import {
   PriceEvolutionChart,
   VehicleComparisonChart,
 } from "@/components/charts";
+import { FuelConsumptionCards } from "@/components/fuel-consumption-cards";
 import { InsightsList } from "@/components/insights-list";
 import { RecordsTable } from "@/components/records-table";
 import { Card, CardHeader, ColorDot, EmptyState, PageHeader, StatCard } from "@/components/ui";
@@ -115,28 +116,7 @@ export default async function DashboardPage({
             }
             accent="#22d3ee"
           />
-          <StatCard
-            label="Consumo promedio"
-            value={
-              summary.avgConsumption
-                ? `${formatNumber(summary.avgConsumption, 2)} ${summary.unit}/100km`
-                : summary.estimatedConsumption
-                  ? `≈ ${formatNumber(summary.estimatedConsumption, 2)} ${summary.unit}/100km`
-                  : "—"
-            }
-            hint={
-              summary.avgConsumption
-                ? `${formatNumber(100 / summary.avgConsumption, 2)} km/${summary.unit}`
-                : summary.estimatedConsumption
-                  ? `± ${formatNumber(summary.estimatedMargin, 2)}${
-                      summary.estimatedLowPrecision ? " · precisión baja" : ""
-                    } · estimado sobre ${formatKm(summary.estimatedDistance)} sin tanque lleno`
-                  : summary.unit === null
-                    ? "Tus vehículos usan unidades distintas: miralo por vehículo"
-                    : "Necesitás dos cargas a tanque lleno"
-            }
-            accent="#a78bfa"
-          />
+          <FuelConsumptionCards fuels={summary.byFuelConsumption} />
           <StatCard
             label="Costo por kilómetro"
             value={summary.costPerKm ? formatCurrency(summary.costPerKm) : "—"}
