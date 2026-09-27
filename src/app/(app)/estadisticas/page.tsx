@@ -110,6 +110,14 @@ export default async function StatisticsPage({
   const quantityWord = unit === "L" ? "litros" : (unit ?? "cantidad");
   const mixedUnits = unit === null;
 
+  /* Consumo del contexto: medido si lo hay, estimado si sólo hay parciales. */
+  const consumption = selected?.avgConsumption ?? summary.avgConsumption;
+  const estimated = selected ? selected.estimatedConsumption : summary.estimatedConsumption;
+  const estimatedMargin = selected ? selected.estimatedMargin : summary.estimatedMargin;
+  const estimatedLowPrecision = selected
+    ? selected.estimatedLowPrecision
+    : summary.estimatedLowPrecision;
+
   /* Cuando hay un vehículo elegido se usan sus series; si no, las de toda la flota. */
   const monthly = selected ? selected.monthly : summary.monthly;
   const byStation = selected ? selected.byStation : summary.byStation;
@@ -176,16 +184,22 @@ export default async function StatisticsPage({
           <StatCard
             label="Consumo promedio"
             value={
-              (selected?.avgConsumption ?? summary.avgConsumption)
-                ? `${formatNumber((selected?.avgConsumption ?? summary.avgConsumption)!, 2)} ${consumptionUnit}`
-                : "—"
+              consumption
+                ? `${formatNumber(consumption, 2)} ${consumptionUnit}`
+                : estimated
+                  ? `≈ ${formatNumber(estimated, 2)} ${consumptionUnit}`
+                  : "—"
             }
             hint={
-              selected
-                ? `Mejor tramo: ${selected.bestConsumption ? formatNumber(selected.bestConsumption, 2) : "—"}`
-                : mixedUnits
-                  ? "Tus vehículos usan unidades distintas: elegí uno para verlo"
-                  : undefined
+              estimated && !consumption
+                ? `± ${formatNumber(estimatedMargin, 2)}${
+                    estimatedLowPrecision ? " · precisión baja" : ""
+                  } · estimado sin tanque lleno`
+                : selected
+                  ? `Mejor tramo: ${selected.bestConsumption ? formatNumber(selected.bestConsumption, 2) : "—"}`
+                  : mixedUnits
+                    ? "Tus vehículos usan unidades distintas: elegí uno para verlo"
+                    : undefined
             }
             accent="#22d3ee"
           />

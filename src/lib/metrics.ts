@@ -1089,6 +1089,16 @@ export type FleetSummary = {
   totalLiters: number | null;
   totalDistance: number;
   avgConsumption: number | null;
+  /**
+   * Consumo estimado de la flota, cuando ningún vehículo tiene todavía un tramo
+   * lleno a lleno. Igual que en el detalle, nunca convive con `avgConsumption`
+   * y nunca viaja sin `estimatedMargin`.
+   */
+  estimatedConsumption: number | null;
+  estimatedMargin: number | null;
+  estimatedLowPrecision: boolean;
+  /** Kilómetros que abarcan las ventanas estimadas sumadas. */
+  estimatedDistance: number;
   costPerKm: number | null;
   avgPricePerLiter: number | null;
   lastPricePerLiter: number | null;
@@ -1131,6 +1141,44 @@ export function computeFleetSummary(stats: VehicleStats[]): FleetSummary {
   );
   const measuredDistance = stats.reduce((sum, s) => sum + s.measuredDistance, 0);
   const measuredLiters = stats.reduce((sum, s) => sum + s.measuredLiters, 0);
+
+  /**
+   * Estimación combinada: se arma sólo cuando no hay ni un tramo lleno a lleno
+   * en toda la flota. Un promedio medido y uno estimado no se promedian entre
+   * sí —±1 L contra ±40 L—, la misma regla que dentro de cada vehículo.
+   *
+   * Los márgenes no se promedian, se suman: cada vehículo aporta su propia cota
+   * de variación de nivel de tanque (margen × km ÷ 100) y el margen combinado es
+   * la suma de esas cotas sobre el total de kilómetros estimados. Sumar vehículos
+   * no achica la incertidumbre —cada tanque esconde la suya—, así que el margen
+   * relativo de la flota queda entre el mejor y el peor de los vehículos; lo que
+   * lo cierra es que cada uno acumule kilómetros, no que haya más vehículos.
+   */
+  const estimatedVehicles = stats.filter((s) => s.estimatedConsumption !== null);
+  const estimatedDistance = round(
+    estimatedVehicles.reduce((sum, s) => sum + s.estimatedDistance, 0),
+    1,
+  );
+  const estimatedQuantity = estimatedVehicles.reduce(
+    (sum, s) => sum + (s.estimatedConsumption! * s.estimatedDistance) / 100,
+    0,
+  );
+  const estimatedLevelBound = estimatedVehicles.reduce(
+    (sum, s) => sum + ((s.estimatedMargin ?? 0) * s.estimatedDistance) / 100,
+    0,
+  );
+
+  const canEstimate = !hasMixedUnits && measuredDistance <= 0 && estimatedDistance > 0;
+  const estimatedConsumption = canEstimate
+    ? round((estimatedQuantity / estimatedDistance) * 100, 2)
+    : null;
+  const estimatedMargin = canEstimate
+    ? round((estimatedLevelBound / estimatedDistance) * 100, 2)
+    : null;
+  const estimatedLowPrecision =
+    estimatedConsumption !== null &&
+    estimatedMargin !== null &&
+    estimatedMargin > estimatedConsumption * PRECISE_ESTIMATE_MARGIN_RATIO;
 
   /* Series mensuales combinadas */
   const monthlyMap = new Map<string, MonthlyPoint>();
@@ -1204,6 +1252,10 @@ export function computeFleetSummary(stats: VehicleStats[]): FleetSummary {
       !hasMixedUnits && measuredDistance > 0
         ? round((measuredLiters / measuredDistance) * 100, 2)
         : null,
+    estimatedConsumption,
+    estimatedMargin,
+    estimatedLowPrecision,
+    estimatedDistance: canEstimate ? estimatedDistance : 0,
     // El costo por kilómetro son pesos sobre kilómetros: vale siempre, mezcle
     // o no la flota combustibles distintos.
     costPerKm: totalDistance > 0 ? round(totalSpent / totalDistance, 2) : null,

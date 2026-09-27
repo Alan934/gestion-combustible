@@ -9,7 +9,7 @@
  */
 
 import { buildInsights } from "../src/lib/insights";
-import { computeVehicleStats, enrichRecords } from "../src/lib/metrics";
+import { computeFleetSummary, computeVehicleStats, enrichRecords } from "../src/lib/metrics";
 import type { FuelRecord, Vehicle } from "../src/lib/db/schema";
 
 let contador = 0;
@@ -390,6 +390,38 @@ console.log("\n18) El margen del estimado juega a favor: la duda no dispara alar
 
   comprobar("el estimado da 3,33", lejos.estimatedConsumption, 3.33);
   comprobar("y ahí sí se alarma", tieneInsight(lejos, "implausible-consumption"), true);
+}
+
+console.log("\n19) La flota estima cuando ningún vehículo llegó a medir de verdad\n");
+{
+  contador = 0;
+  const parcial = computeVehicleStats(vehiculo(), parciales(5, 400, 34));
+
+  contador = 0;
+  const conLleno = computeVehicleStats(vehiculo({ name: "Otro" }), [
+    carga(5000, 50),
+    carga(5500, 40), // 500 km con 40 L = 8 L/100km medidos
+  ]);
+
+  const soloParciales = computeFleetSummary([parcial]);
+
+  comprobar("sin tramos reales no hay promedio medido", soloParciales.avgConsumption, null);
+  comprobar("la flota hereda el estimado del vehículo", soloParciales.estimatedConsumption, 8.5);
+  comprobar("con su margen", soloParciales.estimatedMargin, 2.13);
+  comprobar("y el aviso de precisión baja", soloParciales.estimatedLowPrecision, true);
+
+  // Dos ventanas idénticas: las cotas y los kilómetros se duplican igual, así
+  // que el margen relativo no se mueve. Sumar vehículos no achica la duda.
+  const dosParciales = computeFleetSummary([parcial, parcial]);
+
+  comprobar("dos vehículos estimados dan el mismo consumo", dosParciales.estimatedConsumption, 8.5);
+  comprobar("y el mismo margen", dosParciales.estimatedMargin, 2.13);
+  comprobar("sobre el doble de kilómetros", dosParciales.estimatedDistance, 3200);
+
+  const mixta = computeFleetSummary([parcial, conLleno]);
+
+  comprobar("si alguno mide de verdad, el promedio sale de eso", mixta.avgConsumption, 8);
+  comprobar("y el estimado no compite", mixta.estimatedConsumption, null);
 }
 
 console.log(

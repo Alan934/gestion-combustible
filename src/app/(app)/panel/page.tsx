@@ -120,14 +120,20 @@ export default async function DashboardPage({
             value={
               summary.avgConsumption
                 ? `${formatNumber(summary.avgConsumption, 2)} ${summary.unit}/100km`
-                : "—"
+                : summary.estimatedConsumption
+                  ? `≈ ${formatNumber(summary.estimatedConsumption, 2)} ${summary.unit}/100km`
+                  : "—"
             }
             hint={
               summary.avgConsumption
                 ? `${formatNumber(100 / summary.avgConsumption, 2)} km/${summary.unit}`
-                : summary.unit === null
-                  ? "Tus vehículos usan unidades distintas: miralo por vehículo"
-                  : "Necesitás dos cargas a tanque lleno"
+                : summary.estimatedConsumption
+                  ? `± ${formatNumber(summary.estimatedMargin, 2)}${
+                      summary.estimatedLowPrecision ? " · precisión baja" : ""
+                    } · estimado sobre ${formatKm(summary.estimatedDistance)} sin tanque lleno`
+                  : summary.unit === null
+                    ? "Tus vehículos usan unidades distintas: miralo por vehículo"
+                    : "Necesitás dos cargas a tanque lleno"
             }
             accent="#a78bfa"
           />
