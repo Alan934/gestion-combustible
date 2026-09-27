@@ -13,7 +13,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
-    "test:consumo": "tsx scripts/verificar-consumo.ts"
+    "test:consumo": "tsx scripts/verificar-consumo.ts",
+    "test:modelos": "tsx --conditions=react-server --env-file=.env scripts/verificar-modelos.ts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",

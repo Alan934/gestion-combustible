@@ -5,6 +5,13 @@ import type { Schema } from "@google/genai";
 
 import { FUEL_TYPE_IDS, PAYMENT_METHOD_IDS, STATIONS } from "@/lib/catalogs";
 
+import {
+  isRetiredModel,
+  markRetired,
+  rememberWorking,
+  resolveModels,
+  suggestedModels,
+} from "./models";
 import { EXTRACTION_PROMPT, dedupeReceipts, verifyReceipt } from "./receipt";
 import type { ExtractedReceipt, VerifiedReceipt } from "./receipt";
 
@@ -16,9 +23,7 @@ import type { ExtractedReceipt, VerifiedReceipt } from "./receipt";
  * `extractReceipts(images) => VerifiedReceipt[]`.
  */
 
-const DEFAULT_MODEL = "gemini-3.7-flash";
-/** Si el modelo principal está saturado se cae a este, que aguanta bien la tarea. */
-const FALLBACK_MODEL = "gemini-2.5-flash";
+/** Qué modelo usar lo decide `./models`: acá no hay ningún nombre escrito a mano. */
 const ATTEMPTS_PER_MODEL = 2;
 
 export type ReceiptImage = {
@@ -187,14 +192,13 @@ function isOverloaded(message: string) {
 }
 
 /**
- * Pide la extracción probando el modelo principal y, si está saturado, el de
- * respaldo. Cada uno con un reintento y espera creciente: los 503 de la capa
- * gratuita suelen durar segundos.
+ * Pide la extracción recorriendo los modelos candidatos. Cada uno con un
+ * reintento y espera creciente si está saturado (los 503 de la capa gratuita
+ * duran segundos), y salto al siguiente si Google lo dio de baja.
  */
 async function generate(images: ReceiptImage[]) {
   const ai = getClient();
-  const primary = process.env.GEMINI_MODEL || DEFAULT_MODEL;
-  const models = [...new Set([primary, FALLBACK_MODEL])];
+  const queue = await resolveModels(ai);
 
   const parts = [
     { text: EXTRACTION_PROMPT },
@@ -203,9 +207,15 @@ async function generate(images: ReceiptImage[]) {
     })),
   ];
 
+  const tried = new Set<string>();
   let lastOverloadMessage = "";
+  let lastRetiredMessage = "";
 
-  for (const model of models) {
+  while (queue.length) {
+    const model = queue.shift()!;
+    if (tried.has(model)) continue;
+    tried.add(model);
+
     for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
       try {
         const response = await ai.models.generateContent({
@@ -218,6 +228,7 @@ async function generate(images: ReceiptImage[]) {
             responseSchema: RECEIPT_SCHEMA,
           },
         });
+        rememberWorking(model);
         return response.text;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -234,6 +245,18 @@ async function generate(images: ReceiptImage[]) {
             error,
           );
         }
+        if (isRetiredModel(message)) {
+          lastRetiredMessage = message;
+          markRetired(model);
+          console.warn(`[leer-ticket] ${model} ya no está disponible, se prueba con otro`);
+          // El propio error suele nombrar al reemplazo; si no, se relee el catálogo.
+          const hinted = suggestedModels(message, model).filter((id) => !tried.has(id));
+          queue.unshift(...hinted);
+          if (!queue.length) {
+            queue.push(...(await resolveModels(ai)).filter((id) => !tried.has(id)));
+          }
+          break;
+        }
         if (isOverloaded(message)) {
           lastOverloadMessage = message;
           console.warn(`[leer-ticket] ${model} saturado (intento ${attempt})`);
@@ -244,6 +267,13 @@ async function generate(images: ReceiptImage[]) {
         throw new ReceiptExtractionError(`No se pudo consultar el modelo: ${message}`, error);
       }
     }
+  }
+
+  if (lastRetiredMessage) {
+    throw new ReceiptExtractionError(
+      "Ningún modelo de Gemini disponible aceptó la consulta. Puede que haga falta actualizar la librería @google/genai, o que GEMINI_MODEL apunte a un modelo que ya no existe.",
+      lastRetiredMessage,
+    );
   }
 
   throw new ReceiptExtractionError(
