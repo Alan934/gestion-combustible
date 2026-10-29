@@ -89,10 +89,33 @@ function resolveTriple(values: TripleValues, order: TripleKey[]): TripleState {
   };
 }
 
+const EMPTY_TRIPLE: TripleState = {
+  values: { liters: "", pricePerLiter: "", totalAmount: "" },
+  order: [],
+  derived: null,
+};
+
+/** Una boleta más de la misma carga: su propio trío y su número de factura. */
+type ExtraReceipt = { id: number; triple: TripleState; invoiceNumber: string };
+
+/**
+ * El total y los litros son los datos más duros del ticket; si falta alguno,
+ * el precio entra como respaldo y el faltante se calcula.
+ */
+function tripleFromReceipt(receipt: VerifiedReceipt): TripleState {
+  const values: TripleValues = {
+    liters: receipt.liters !== null ? String(receipt.liters) : "",
+    pricePerLiter: receipt.pricePerLiter !== null ? String(receipt.pricePerLiter) : "",
+    totalAmount: receipt.totalAmount !== null ? String(receipt.totalAmount) : "",
+  };
+  const order: TripleKey[] = (["totalAmount", "liters", "pricePerLiter"] as TripleKey[]).filter(
+    (key) => values[key],
+  );
+  return resolveTriple(values, order);
+}
+
 function initialTriple(record?: FuelRecord): TripleState {
-  if (!record) {
-    return { values: { liters: "", pricePerLiter: "", totalAmount: "" }, order: [], derived: null };
-  }
+  if (!record) return EMPTY_TRIPLE;
   return {
     values: {
       liters: toInput(record.liters, 3),
@@ -151,6 +174,8 @@ export function FuelRecordForm({
   const odometerRef = useRef<HTMLInputElement>(null);
 
   const [triple, setTriple] = useState<TripleState>(() => initialTriple(record));
+  const [extras, setExtras] = useState<ExtraReceipt[]>([]);
+  const nextExtraId = useRef(0);
   const [odometer, setOdometer] = useState(record ? String(record.odometer) : "");
   const selectedFuelInicial = record?.fuelType ?? vehicle?.fuelType ?? "nafta_super";
   const [selectedFuel, setSelectedFuel] = useState(selectedFuelInicial);
@@ -242,23 +267,54 @@ export function FuelRecordForm({
   }
 
   function clearTriple() {
-    setTriple({ values: { liters: "", pricePerLiter: "", totalAmount: "" }, order: [], derived: null });
+    setTriple(EMPTY_TRIPLE);
+  }
+
+  /* ------------------- Boletas adicionales de la misma carga ----------------- */
+
+  function addExtra(initial?: Partial<ExtraReceipt>) {
+    nextExtraId.current += 1;
+    const extra: ExtraReceipt = {
+      id: nextExtraId.current,
+      triple: EMPTY_TRIPLE,
+      invoiceNumber: "",
+      ...initial,
+    };
+    setExtras((prev) => [...prev, extra]);
+  }
+
+  function updateExtraTriple(id: number, key: TripleKey, raw: string) {
+    setExtras((prev) =>
+      prev.map((extra) => {
+        if (extra.id !== id) return extra;
+        const values = { ...extra.triple.values, [key]: raw };
+        const order = [key, ...extra.triple.order.filter((k) => k !== key)];
+        return { ...extra, triple: resolveTriple(values, order) };
+      }),
+    );
+  }
+
+  function updateExtraInvoice(id: number, invoiceNumber: string) {
+    setExtras((prev) => prev.map((extra) => (extra.id === id ? { ...extra, invoiceNumber } : extra)));
+  }
+
+  function removeExtra(id: number) {
+    setExtras((prev) => prev.filter((extra) => extra.id !== id));
+  }
+
+  /** Desde el lector de fotos: si la primera boleta todavía está vacía, ocupa su lugar. */
+  function addReceiptFromScan(receipt: VerifiedReceipt) {
+    if (!TRIPLE_KEYS.some((key) => triple.values[key].trim())) {
+      applyReceipt(receipt);
+      return;
+    }
+    addExtra({ triple: tripleFromReceipt(receipt), invoiceNumber: receipt.invoiceNumber ?? "" });
   }
 
   /* ---------------------- Precargado desde la foto del ticket ---------------- */
 
   function applyReceipt(receipt: VerifiedReceipt) {
-    const values: TripleValues = {
-      liters: receipt.liters !== null ? String(receipt.liters) : "",
-      pricePerLiter: receipt.pricePerLiter !== null ? String(receipt.pricePerLiter) : "",
-      totalAmount: receipt.totalAmount !== null ? String(receipt.totalAmount) : "",
-    };
-    // El total y los litros son los datos más duros del ticket; si falta alguno,
-    // el precio entra como respaldo y el faltante se calcula.
-    const order: TripleKey[] = (["totalAmount", "liters", "pricePerLiter"] as TripleKey[]).filter(
-      (key) => values[key],
-    );
-    setTriple(resolveTriple(values, order));
+    setTriple(tripleFromReceipt(receipt));
 
     if (receipt.filledAt && DATETIME_LOCAL.test(receipt.filledAt)) {
       setDetails((prev) => ({ ...prev, filledAt: receipt.filledAt! }));
@@ -297,10 +353,18 @@ export function FuelRecordForm({
   // hacerlo a mano acá le impide optimizar el componente entero.
   const lastOdometer = vehicle?.lastOdometer ?? null;
 
+  /** Lo cargado en total: la primera boleta más las que se sumaron. */
+  const combined = (() => {
+    const receipts = [triple, ...extras.map((extra) => extra.triple)];
+    const liters = receipts.reduce((sum, r) => sum + (toNumber(r.values.liters) ?? 0), 0);
+    const total = receipts.reduce((sum, r) => sum + (toNumber(r.values.totalAmount) ?? 0), 0);
+    return { liters: liters || null, total: total || null };
+  })();
+
   const preview = (() => {
     const odo = toNumber(odometer);
-    const liters = toNumber(triple.values.liters);
-    const total = toNumber(triple.values.totalAmount);
+    const liters = combined.liters;
+    const total = combined.total;
 
     const distance = odo !== null && lastOdometer !== null ? round(odo - lastOdometer, 1) : null;
     const consumption =
@@ -338,7 +402,9 @@ export function FuelRecordForm({
 
   return (
     <div className="grid grid-cols-1 gap-5">
-      {scanningEnabled ? <ReceiptScanner onApply={applyReceipt} /> : null}
+      {scanningEnabled ? (
+        <ReceiptScanner onApply={applyReceipt} onAdd={addReceiptFromScan} />
+      ) : null}
 
       <form action={formAction} className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_20rem] lg:items-start">
         <div className="grid grid-cols-1 gap-5">
@@ -438,8 +504,7 @@ export function FuelRecordForm({
                           : ""
                       }`
                     : "Los kilómetros que marca el tablero al momento de cargar."
-                }
-              >
+                }              >
                 <input
                   ref={odometerRef}
                   id="odometer"
@@ -579,6 +644,108 @@ export function FuelRecordForm({
                 </span>
               </label>
             </div>
+          </Card>
+
+          {/* ------------------------ Otras boletas de la carga --------------------- */}
+          <Card>
+            <CardHeader
+              title="Más de una boleta"
+              subtitle="Si pagaste esta carga en dos o más tickets, sumalos acá: se guardan como una sola carga"
+              action={
+                <button
+                  type="button"
+                  onClick={() => addExtra()}
+                  className="btn btn-secondary px-3 py-1.5 text-xs"
+                >
+                  + Sumar otra boleta
+                </button>
+              }
+            />
+            {extras.length ? (
+              <div className="card-pad grid gap-5">
+                {extras.map((extra, index) => (
+                  <div key={extra.id} className="grid gap-3 rounded-2xl border border-white/8 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-ink-100">Boleta {index + 2}</h3>
+                      <button
+                        type="button"
+                        onClick={() => removeExtra(extra.id)}
+                        className="btn btn-ghost px-3 py-1.5 text-xs"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      {TRIPLE_KEYS.map((key) => (
+                        <Field
+                          key={key}
+                          label={
+                            key === "liters"
+                              ? `Cantidad (${unit})`
+                              : key === "pricePerLiter"
+                                ? `Precio por ${unit}`
+                                : "Total pagado ($)"
+                          }
+                          htmlFor={`extra-${extra.id}-${key}`}
+                          hint={
+                            extra.triple.derived === key ? (
+                              <span className="flex items-center gap-1.5">
+                                <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-accent uppercase">
+                                  auto
+                                </span>
+                              </span>
+                            ) : undefined
+                          }
+                        >
+                          <input
+                            id={`extra-${extra.id}-${key}`}
+                            name={
+                              key === "liters"
+                                ? "extraLiters"
+                                : key === "pricePerLiter"
+                                  ? "extraPricePerLiter"
+                                  : "extraTotalAmount"
+                            }
+                            inputMode="decimal"
+                            value={extra.triple.values[key]}
+                            onChange={(event) => updateExtraTriple(extra.id, key, event.target.value)}
+                            className={`input ${extra.triple.derived === key ? "border-accent/50 text-accent" : ""}`}
+                          />
+                        </Field>
+                      ))}
+                    </div>
+
+                    <Field label="N° de factura (opcional)" htmlFor={`extra-${extra.id}-invoice`}>
+                      <input
+                        id={`extra-${extra.id}-invoice`}
+                        name="extraInvoiceNumber"
+                        value={extra.invoiceNumber}
+                        onChange={(event) => updateExtraInvoice(extra.id, event.target.value)}
+                        className="input"
+                      />
+                    </Field>
+                  </div>
+                ))}
+
+                <div className="rounded-xl border border-accent/25 bg-accent/8 px-4 py-3 text-sm text-cyan-100">
+                  <p>
+                    Total de la carga ({extras.length + 1} boletas):{" "}
+                    <strong className="tabular">
+                      {combined.liters !== null ? `${formatNumber(combined.liters, 3)} ${unit}` : "—"}
+                    </strong>{" "}
+                    ·{" "}
+                    <strong className="tabular">
+                      {combined.total !== null ? formatCurrency(combined.total) : "—"}
+                    </strong>
+                  </p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-cyan-100/80">
+                    Los kilómetros, la fecha y el medio de pago de arriba valen para toda la carga.
+                    El desglose de IVA no se guarda cuando hay más de una boleta.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </Card>
 
           {/* ---------------------------- Datos del ticket -------------------------- */}

@@ -9,8 +9,8 @@ import { FUEL_TYPE_IDS, PAYMENT_METHOD_IDS, STATIONS } from "@/lib/catalogs";
 import type { FuelTypeId, PaymentMethodId } from "@/lib/catalogs";
 import { db } from "@/lib/db";
 import { fuelRecords, vehicles } from "@/lib/db/schema";
-import { formatDate, formatKm } from "@/lib/format";
-import { solveTaxes, solveTriple } from "@/lib/fuel-math";
+import { formatCurrency, formatDate, formatKm, formatNumber } from "@/lib/format";
+import { mergeTriples, solveTaxes, solveTriple } from "@/lib/fuel-math";
 import { parseArgentinaDateTime, parseBoolean, parseNumber, parseText } from "@/lib/parse";
 
 export type FormState = { error?: string; ok?: boolean } | null;
@@ -64,6 +64,43 @@ async function validateOdometer(
   return null;
 }
 
+/**
+ * Boletas adicionales de la misma carga. Llegan como listas paralelas
+ * (`extraLiters[i]`, `extraPricePerLiter[i]`…); una fila sin ningún dato se
+ * ignora, una a medio completar se rechaza diciendo cuál es.
+ */
+function readExtraReceipts(formData: FormData) {
+  const liters = formData.getAll("extraLiters");
+  const prices = formData.getAll("extraPricePerLiter");
+  const totals = formData.getAll("extraTotalAmount");
+  const invoices = formData.getAll("extraInvoiceNumber");
+
+  const receipts: {
+    liters: number;
+    pricePerLiter: number;
+    totalAmount: number;
+    invoiceNumber: string | null;
+  }[] = [];
+
+  for (let index = 0; index < liters.length; index += 1) {
+    const triple = {
+      liters: parseNumber(liters[index] ?? null),
+      pricePerLiter: parseNumber(prices[index] ?? null),
+      totalAmount: parseNumber(totals[index] ?? null),
+    };
+    const invoiceNumber = parseText(invoices[index] ?? null);
+
+    if (!triple.liters && !triple.pricePerLiter && !triple.totalAmount && !invoiceNumber) continue;
+
+    const solved = solveTriple(triple);
+    if (!solved.ok) return { error: `Boleta ${index + 2}: ${solved.error}` } as const;
+
+    receipts.push({ ...solved, invoiceNumber });
+  }
+
+  return { receipts } as const;
+}
+
 async function readRecordForm(userId: string, formData: FormData) {
   const vehicleId = parseText(formData.get("vehicleId"));
   if (!vehicleId) return { error: "Elegí un vehículo" } as const;
@@ -94,12 +131,40 @@ async function readRecordForm(userId: string, formData: FormData) {
   });
   if (!solved.ok) return { error: solved.error } as const;
 
-  const taxes = solveTaxes({
-    totalAmount: solved.totalAmount,
-    netAmount: parseNumber(formData.get("netAmount")),
-    vatAmount: parseNumber(formData.get("vatAmount")),
-    otherTaxes: parseNumber(formData.get("otherTaxes")),
-  });
+  const extras = readExtraReceipts(formData);
+  if ("error" in extras) return { error: extras.error } as const;
+
+  const combined =
+    extras.receipts.length > 0 ? mergeTriples([solved, ...extras.receipts]) : solved;
+
+  // El desglose impositivo se carga de la primera boleta: con más de una, lo que
+  // se guardaría sería un IVA parcial contra un total completo. Mejor ninguno.
+  const taxes = extras.receipts.length
+    ? { netAmount: null, vatAmount: null, otherTaxes: null }
+    : solveTaxes({
+        totalAmount: solved.totalAmount,
+        netAmount: parseNumber(formData.get("netAmount")),
+        vatAmount: parseNumber(formData.get("vatAmount")),
+        otherTaxes: parseNumber(formData.get("otherTaxes")),
+      });
+
+  const invoiceNumber = [
+    parseText(formData.get("invoiceNumber")),
+    ...extras.receipts.map((receipt) => receipt.invoiceNumber),
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
+  const notes = [
+    parseText(formData.get("notes")),
+    extras.receipts.length
+      ? `Suma de ${extras.receipts.length + 1} boletas: ${[solved, ...extras.receipts]
+          .map((receipt) => `${formatNumber(receipt.liters, 3)} · ${formatCurrency(receipt.totalAmount)}`)
+          .join(" + ")}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     vehicleId,
@@ -108,9 +173,9 @@ async function readRecordForm(userId: string, formData: FormData) {
       userId,
       filledAt,
       odometer,
-      liters: solved.liters,
-      pricePerLiter: solved.pricePerLiter,
-      totalAmount: solved.totalAmount,
+      liters: combined.liters,
+      pricePerLiter: combined.pricePerLiter,
+      totalAmount: combined.totalAmount,
       fuelType:
         pick<FuelTypeId>(parseText(formData.get("fuelType")), FUEL_TYPE_IDS, null) ??
         vehicle.fuelType,
@@ -127,11 +192,11 @@ async function readRecordForm(userId: string, formData: FormData) {
       ),
       isFullTank: parseBoolean(formData.get("isFullTank")),
       missedPreviousFill: parseBoolean(formData.get("missedPreviousFill")),
-      invoiceNumber: parseText(formData.get("invoiceNumber")),
+      invoiceNumber: invoiceNumber || null,
       netAmount: taxes.netAmount,
       vatAmount: taxes.vatAmount,
       otherTaxes: taxes.otherTaxes,
-      notes: parseText(formData.get("notes")),
+      notes: notes || null,
     },
   } as const;
 }
