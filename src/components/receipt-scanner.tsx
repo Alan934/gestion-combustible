@@ -101,7 +101,14 @@ function ReceiptSummary({ receipt }: { receipt: VerifiedReceipt }) {
   );
 }
 
-export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt) => void }) {
+export function ReceiptScanner({
+  onApply,
+  onAdd,
+}: {
+  onApply: (receipt: VerifiedReceipt) => void;
+  /** Suma el comprobante como otra boleta de la misma carga. */
+  onAdd?: (receipt: VerifiedReceipt) => void;
+}) {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [previews, setPreviews] = useState<Preview[]>([]);
@@ -339,16 +346,32 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
                       ) : null}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onApply(receipt);
-                        setUsed((current) => new Set(current).add(index));
-                      }}
-                      className={isUsed ? "btn btn-secondary" : "btn btn-primary"}
-                    >
-                      {isUsed ? "Volver a aplicar" : "Usar estos datos"}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onApply(receipt);
+                          setUsed((current) => new Set(current).add(index));
+                        }}
+                        className={isUsed ? "btn btn-secondary" : "btn btn-primary"}
+                      >
+                        {isUsed ? "Volver a aplicar" : "Usar estos datos"}
+                      </button>
+
+                      {onAdd && receipts.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onAdd(receipt);
+                            setUsed((current) => new Set(current).add(index));
+                          }}
+                          disabled={isUsed}
+                          className="btn btn-secondary"
+                        >
+                          Sumar a la carga
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
 
                   <ReceiptSummary receipt={receipt} />
@@ -369,8 +392,9 @@ export function ReceiptScanner({ onApply }: { onApply: (receipt: VerifiedReceipt
 
             {receipts.length > 1 ? (
               <p className="text-xs leading-relaxed text-ink-400">
-                Los comprobantes se cargan de a uno: aplicá el primero, guardá la carga y volvé para
-                el siguiente. Esta lista se mantiene mientras no recargues la página.
+                Si son boletas de una misma carga, usá la primera y sumá las demás con “Sumar a la
+                carga”. Si son cargas distintas, aplicá una, guardala y volvé por la siguiente: esta
+                lista se mantiene mientras no recargues la página.
               </p>
             ) : null}
           </div>

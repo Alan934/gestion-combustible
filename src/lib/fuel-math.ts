@@ -80,6 +80,25 @@ export function solveTriple({ liters, pricePerLiter, totalAmount }: FuelTriple):
   };
 }
 
+/**
+ * Una misma carga puede venir en más de una boleta (se cortó el surtidor, se
+ * pagó en dos veces, dos medios de pago). Para el resto de la app es una sola
+ * carga: los litros y el total se suman y el precio por litro queda como el
+ * promedio ponderado, que es el que sigue cumpliendo litros × precio = total.
+ */
+export function mergeTriples(parts: { liters: number; totalAmount: number }[]) {
+  const liters = round(
+    parts.reduce((sum, part) => sum + part.liters, 0),
+    3,
+  );
+  const totalAmount = round(
+    parts.reduce((sum, part) => sum + part.totalAmount, 0),
+    2,
+  );
+
+  return { liters, totalAmount, pricePerLiter: round(totalAmount / liters, 3) };
+}
+
 /* -------------------------------------------------------------------------- */
 /*                             Desglose impositivo                             */
 /* -------------------------------------------------------------------------- */
